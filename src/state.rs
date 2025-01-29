@@ -21,15 +21,21 @@ pub struct Market {
     pub id: String,
     pub options: Vec<String>, // Always two options (binary)
     //TODO: make sure that we track both options/tokens for each users
-    pub shares: Vec<Share>,     // Tracks user bets
-    pub resolved: bool,         // Whether the market is resolved
-    pub outcome: MarketOutcome, // Unresolved, OptionA, or OptionB
-    pub end_time: Timestamp,    // When the market ends
-    pub total_value: Coin,      // Total value staked in the market
-    pub num_bettors: u64,       // Number of unique bettors
-    pub token_a: String,        // Denom for the first option
-    pub token_b: String,        // Denom for the second option
-    pub buy_token: String,      // Denom for the token used to buy shares
+    pub shares: Vec<Share>,        // Tracks user bets
+    pub resolved: bool,            // Whether the market is resolved
+    pub outcome: MarketOutcome,    // Unresolved, OptionA, or OptionB
+    pub end_time: Timestamp,       // When the market ends
+    pub total_value: Coin,         // Total value staked in the market
+    pub num_bettors: u64,          // Number of unique bettors
+    pub token_a: String,           // Denom for the first option
+    pub token_b: String,           // Denom for the second option
+    pub buy_token: String,         // Denom for the token used to buy shares
+    pub banner_url: String,        // URL for the banner image
+    pub description: String,       // Description of the market
+    pub title: String,             // Title of the market
+    pub end_time_string: String,   // End time of the market
+    pub start_time_string: String, // Start time of the market
+    pub resolution_source: String, // Source of the resolution
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -38,6 +44,7 @@ pub struct Share {
     pub user: Addr,
     pub option: String,
     pub token: Coin,
+    pub has_withdrawn: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

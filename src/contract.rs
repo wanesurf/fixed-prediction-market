@@ -2,23 +2,21 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     attr, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
-    Timestamp,
 };
-use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{Market, MarketOutcome, Share, State, MARKETS, STATE};
+use cosmwasm_std::{CosmosMsg, Timestamp, Uint128};
 
 //Coreum related imports
-use coreum_test_tube::CoreumTestApp;
 use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgIssue;
+use coreum_wasm_sdk::types::coreum::asset::ft::v1::{
+    MsgBurn, MsgMint, QueryTokenRequest, QueryTokenResponse, Token,
+};
+
 use coreum_wasm_sdk::types::cosmos::bank::v1beta1::MsgSend;
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
-
-// version info for migration info
-const CONTRACT_NAME: &str = "crates.io:truth-markets-contract-fixed";
-const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -48,7 +46,27 @@ pub fn execute(
             options,
             end_time,
             buy_token,
-        } => execute::create_market(deps, env, info, id, options, end_time, buy_token),
+            banner_url,
+            description,
+            title,
+            end_time_string,
+            start_time_string,
+            resolution_source,
+        } => execute::create_market(
+            deps,
+            env,
+            info,
+            id,
+            options,
+            end_time,
+            buy_token,
+            banner_url,
+            description,
+            title,
+            end_time_string,
+            start_time_string,
+            resolution_source,
+        ),
         ExecuteMsg::BuyShare {
             market_id,
             option,
@@ -65,9 +83,6 @@ pub fn execute(
 pub mod execute {
     use std::str::FromStr;
 
-    use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgMint;
-    use cosmwasm_std::{Timestamp, Uint128};
-
     use super::*;
 
     pub fn create_market(
@@ -78,6 +93,12 @@ pub mod execute {
         options: Vec<String>,
         end_time: Timestamp,
         buy_token: String,
+        banner_url: String,
+        description: String,
+        title: String,
+        end_time_string: String,
+        start_time_string: String,
+        resolution_source: String,
     ) -> Result<Response, ContractError> {
         let mut state = STATE.load(deps.storage)?;
         // Check if the market ID already exists
@@ -93,17 +114,28 @@ pub mod execute {
             )));
         }
 
-        let subunit_token_a = format!("u{}", &options[0]);
+        let subunit_token_a = format!(
+            "truth{}_{}",
+            options[0].to_lowercase().replace(" ", "_"),
+            id.to_lowercase().replace(" ", "_")
+        );
+
+        let symbol_token_a = format!(
+            "TM{}{}", // TM prefix for "Truth Markets"
+            options[0].replace(" ", ""),
+            id.replace(" ", "")
+        );
 
         // Issue two new smart tokens for the market options
         let token_a = MsgIssue {
             issuer: env.contract.address.to_string(),
-            symbol: options[0].clone(),
+            symbol: symbol_token_a.clone(),
             subunit: subunit_token_a.clone(),
             precision: 6,
             initial_amount: "0".to_string(),
             description: format!("Token for {} in market {}", options[0], id),
-            features: vec![],
+            //Minting & Burning is enabled
+            features: vec![0 as i32, 1 as i32],
             burn_rate: "0".to_string(),
             send_commission_rate: "0".to_string(),
             uri: "https://truthmarkets.com".to_string(),
@@ -112,18 +144,28 @@ pub mod execute {
             dex_settings: None,
         };
 
-        let denom_token_a = format!("{}:{}", subunit_token_a, env.contract.address);
+        let denom_token_a = format!("{}-{}", subunit_token_a, env.contract.address);
 
-        let subunit_token_b = format!("u{}", &options[1]);
+        let subunit_token_b = format!(
+            "truth{}_{}",
+            options[1].to_lowercase().replace(" ", "_"),
+            id.to_lowercase().replace(" ", "_")
+        );
+
+        let symbol_token_b = format!(
+            "TM{}{}", // TM prefix for "Truth Markets"
+            options[1].replace(" ", ""),
+            id.replace(" ", "")
+        );
 
         let token_b = MsgIssue {
             issuer: env.contract.address.to_string(),
-            symbol: options[1].clone(),
+            symbol: symbol_token_b.clone(),
             subunit: subunit_token_b.clone(),
             precision: 6,
             initial_amount: "0".to_string(),
             description: format!("Token for {} in market {}", options[1], id),
-            features: vec![],
+            features: vec![0 as i32, 1 as i32],
             burn_rate: "0".to_string(),
             send_commission_rate: "0".to_string(),
             uri: "https://truthmarkets.com".to_string(),
@@ -132,7 +174,7 @@ pub mod execute {
             dex_settings: None,
         };
 
-        let denom_token_b = format!("{}:{}", subunit_token_b, env.contract.address);
+        let denom_token_b = format!("{}-{}", subunit_token_b, env.contract.address);
 
         let market = Market {
             id: id.clone(),
@@ -149,6 +191,12 @@ pub mod execute {
             token_a: denom_token_a,
             token_b: denom_token_b,
             buy_token: buy_token,
+            banner_url: banner_url,
+            description: description,
+            title: title,
+            end_time_string: end_time_string,
+            start_time_string: start_time_string,
+            resolution_source: resolution_source,
         };
 
         // Save the market to the MARKETS map
@@ -156,10 +204,14 @@ pub mod execute {
 
         // Update the state with the new market ID\
         state.admin = info.sender;
-        state.market_ids.push(id);
+        state.market_ids.push(id.clone());
         STATE.save(deps.storage, &state)?;
 
-        Ok(Response::new().add_attribute("action", "create_market"))
+        Ok(Response::new()
+            .add_attribute("action", "create_market")
+            .add_attribute("market_id", id)
+            .add_message(CosmosMsg::Any(token_a.to_any()))
+            .add_message(CosmosMsg::Any(token_b.to_any())))
     }
 
     pub fn buy_share(
@@ -172,10 +224,17 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut market = MARKETS.load(deps.storage, &market_id)?;
 
-        // Check if the buy token is valid
-        if amount.denom != market.buy_token {
+        // Ensure the user sent the correct amount of tokens
+        let sent_funds = info
+            .funds
+            .iter()
+            .find(|coin| coin.denom == market.buy_token)
+            .ok_or_else(|| ContractError::Std(StdError::generic_err("No tokens sent")))?;
+
+        // Check if the amount matches
+        if sent_funds.amount.to_string() != amount.amount {
             return Err(ContractError::Std(StdError::generic_err(
-                "Invalid buy token",
+                "Incorrect amount of tokens sent",
             )));
         }
 
@@ -205,6 +264,7 @@ pub mod execute {
                     user: info.sender.clone(),
                     option: option.clone(),
                     token: amount.clone(),
+                    has_withdrawn: false,
                 };
                 market.shares.push(share);
             }
@@ -223,6 +283,7 @@ pub mod execute {
                         user: info.sender.clone(),
                         option: option.clone(),
                         token: amount.clone(),
+                        has_withdrawn: false,
                     };
                     market.shares.push(share);
                 }
@@ -256,12 +317,11 @@ pub mod execute {
             market.token_b.clone()
         };
 
-        //Mint new tokens of the chosen option & Transfer the new tokens to the user
-        let mint = MsgMint {
+        let mint_msg = MsgMint {
             sender: env.contract.address.to_string(),
             coin: Some(Coin {
-                denom: chosen_option.clone(),
-                amount: amount.amount.clone(),
+                denom: chosen_option.to_string(),
+                amount: sent_funds.amount.to_string(),
             }),
             recipient: info.sender.to_string(),
         };
@@ -269,7 +329,9 @@ pub mod execute {
         // Save the updated market
         MARKETS.save(deps.storage, &market_id, &market)?;
 
-        Ok(Response::new().add_attribute("action", "buy_share"))
+        Ok(Response::new()
+            .add_attribute("action", "buy_share")
+            .add_message(CosmosMsg::Any(mint_msg.to_any())))
     }
 
     pub fn resolve(
@@ -331,8 +393,7 @@ pub mod execute {
         info: MessageInfo,
         market_id: String,
     ) -> Result<Response, ContractError> {
-        let state = STATE.load(deps.storage)?;
-        let market = MARKETS.load(deps.storage, &market_id)?;
+        let mut market = MARKETS.load(deps.storage, &market_id)?;
 
         if !market.resolved {
             return Err(ContractError::Std(StdError::generic_err(
@@ -364,21 +425,39 @@ pub mod execute {
             .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
             .sum();
 
-        let user_shares: Uint128 = market
+        let mut user_shares: Vec<_> = market
             .shares
-            .iter()
+            .iter_mut()
             .filter(|s| s.user == info.sender && &s.option == winning_option)
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
-            .sum();
+            .collect();
 
-        if user_shares.is_zero() {
+        if user_shares.is_empty() {
+            return Err(ContractError::Std(StdError::generic_err(
+                "No shares to withdraw",
+            )));
+        }
+        if total_winning_shares.is_zero() {
             return Err(ContractError::Std(StdError::generic_err(
                 "No winning shares to withdraw",
             )));
         }
 
-        let user_share_ratio = user_shares / total_winning_shares;
+        let user_share_ratio =
+            user_shares[0].token.amount.parse::<Uint128>()? / total_winning_shares;
         let user_winnings = user_share_ratio * total_losing_shares;
+
+        // Check if the user has already withdrawn
+        if user_shares[0].has_withdrawn {
+            return Err(ContractError::Std(StdError::generic_err(
+                "User has already withdrawn",
+            )));
+        }
+
+        // Mark the user's shares as withdrawn
+        user_shares[0].has_withdrawn = true;
+
+        // Save the updated market
+        MARKETS.save(deps.storage, &market_id, &market)?;
 
         let transfer_bank_msg = MsgSend {
             from_address: env.contract.address.to_string(),
@@ -389,7 +468,10 @@ pub mod execute {
             }],
         };
 
-        Ok(Response::new().add_attribute("action", "withdraw"))
+        Ok(Response::new()
+            .add_message(CosmosMsg::Any(transfer_bank_msg.to_any()))
+            .add_attribute("action", "withdraw")
+            .add_attribute("amount", user_winnings.to_string()))
     }
 }
 
@@ -409,9 +491,15 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetUserPotentialWinnings { market_id, user } => to_json_binary(
             &query::query_user_potential_winnings(deps, market_id, user)?,
         ),
+        QueryMsg::GetUserBalance { user, denom } => {
+            to_json_binary(&query::query_balance(deps, user, denom)?)
+        }
     }
 }
 pub mod query {
+    use coreum_wasm_sdk::types::coreum::asset::ft::v1::{
+        QueryBalanceRequest, QueryBalanceResponse,
+    };
     use cosmwasm_std::Addr;
 
     use crate::msg::{
@@ -431,6 +519,15 @@ pub mod query {
             end_time: market.end_time,
             total_value: market.total_value,
             num_bettors: market.num_bettors,
+            token_a: market.token_a,
+            token_b: market.token_b,
+            buy_token: market.buy_token,
+            banner_url: market.banner_url,
+            description: market.description,
+            title: market.title,
+            end_time_string: market.end_time_string,
+            start_time_string: market.start_time_string,
+            resolution_source: market.resolution_source,
         })
     }
     pub fn query_shares(
@@ -447,6 +544,7 @@ pub mod query {
                 user: s.user.clone(),
                 option: s.option.clone(),
                 amount: s.token.clone(),
+                has_withdrawn: s.has_withdrawn,
             })
             .collect();
         Ok(user_shares)
@@ -496,6 +594,14 @@ pub mod query {
         let winnings = market.calculate_winnings(&user);
         Ok(UserWinningsResponse { winnings })
     }
+    pub fn query_balance(
+        deps: Deps,
+        account: String,
+        denom: String,
+    ) -> StdResult<QueryBalanceResponse> {
+        let request = QueryBalanceRequest { account, denom };
+        request.query(&deps.querier)
+    }
 }
 
 #[cfg(test)]
@@ -503,9 +609,9 @@ mod tests {
     use crate::msg::{MarketResponse, UserWinningsResponse};
 
     use super::*;
-    use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
+    use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin as SmartToken;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{coins, from_binary, from_json, Addr, Timestamp, Uint128};
+    use cosmwasm_std::{coins, from_binary, from_json, Addr, Coin, Timestamp, Uint128};
 
     // Helper function to instantiate the contract
     fn setup_contract(deps: DepsMut) {
@@ -524,6 +630,12 @@ mod tests {
             options: vec!["OptionA".to_string(), "OptionB".to_string()],
             end_time,
             buy_token: "usdc".to_string(),
+            banner_url: "https://example.com/banner.png".to_string(),
+            description: "This is a description".to_string(),
+            title: "This is a title".to_string(),
+            end_time_string: "2025-01-01".to_string(),
+            start_time_string: "2025-01-01".to_string(),
+            resolution_source: "https://example.com/resolution.json".to_string(),
         };
         let info = mock_info("admin", &[]);
         let env = mock_env();
@@ -531,13 +643,32 @@ mod tests {
     }
 
     #[test]
+    fn test_get_market() {
+        let mut deps = mock_dependencies();
+        setup_contract(deps.as_mut());
+        create_market(deps.as_mut(), "market1", Timestamp::from_seconds(1000));
+        let market: MarketResponse = from_binary(
+            &query(
+                deps.as_ref(),
+                mock_env(),
+                QueryMsg::GetMarket {
+                    id: "market1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(market.id, "market1");
+    }
+
+    #[test]
     fn test_instantiate() {
         let mut deps = mock_dependencies();
         let env = mock_env();
-        let info = mock_info("admin", &coins(1000, "earth"));
+        let info = mock_info("admin", &coins(1000, "ucore"));
 
         let msg = InstantiateMsg {
-            buy_denom: "earth".to_string(),
+            buy_denom: "ucore".to_string(),
         };
 
         let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
@@ -565,6 +696,12 @@ mod tests {
             options: vec!["OptionA".to_string(), "OptionB".to_string()],
             end_time: Timestamp::from_seconds(1000),
             buy_token: "usdc".to_string(),
+            banner_url: "None".to_string(),
+            description: "None".to_string(),
+            title: "None".to_string(),
+            end_time_string: "None".to_string(),
+            start_time_string: "None".to_string(),
+            resolution_source: "None".to_string(),
         };
 
         execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
@@ -572,13 +709,21 @@ mod tests {
         let msg = ExecuteMsg::BuyShare {
             market_id: "market1".to_string(),
             option: "OptionA".to_string(),
-            amount: Coin {
+            amount: SmartToken {
                 denom: "usdc".to_string(),
                 amount: "10".to_string(),
             },
         };
 
-        let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+        let token = Coin {
+            denom: "ucore".to_string(),
+            amount: Uint128::from(1000u128),
+        };
+
+        let info2 = mock_info("admin", &[token]);
+
+        let res = execute(deps.as_mut(), env.clone(), info2.clone(), msg).unwrap();
+
         assert_eq!(res.attributes, vec![attr("action", "buy_share")]);
 
         let market = MARKETS.load(&deps.storage, &"market1".to_string()).unwrap();
@@ -587,7 +732,7 @@ mod tests {
         assert_eq!(market.shares[0].option, "OptionA".to_string());
         assert_eq!(
             market.shares[0].token,
-            Coin {
+            SmartToken {
                 denom: "usdc".to_string(),
                 amount: "10".to_string()
             }
@@ -611,6 +756,12 @@ mod tests {
             options: vec!["OptionA".to_string(), "OptionB".to_string()],
             end_time: Timestamp::from_seconds(1000),
             buy_token: "usdc".to_string(),
+            banner_url: "None".to_string(),
+            description: "None".to_string(),
+            title: "None".to_string(),
+            end_time_string: "None".to_string(),
+            start_time_string: "None".to_string(),
+            resolution_source: "None".to_string(),
         };
 
         execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
@@ -632,7 +783,7 @@ mod tests {
     fn test_withdraw() {
         let mut deps = mock_dependencies();
         let env = mock_env();
-        let info = mock_info("user1", &coins(1000, "earth"));
+        let info = mock_info("user1", &coins(1000, "ucore"));
 
         let msg = InstantiateMsg {
             buy_denom: "earth".to_string(),
@@ -645,6 +796,12 @@ mod tests {
             options: vec!["OptionA".to_string(), "OptionB".to_string()],
             end_time: Timestamp::from_seconds(1000000000),
             buy_token: "usdc".to_string(),
+            banner_url: "None".to_string(),
+            description: "None".to_string(),
+            title: "None".to_string(),
+            end_time_string: "None".to_string(),
+            start_time_string: "None".to_string(),
+            resolution_source: "None".to_string(),
         };
 
         execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
@@ -652,7 +809,7 @@ mod tests {
         let msg = ExecuteMsg::BuyShare {
             market_id: "market1".to_string(),
             option: "OptionA".to_string(),
-            amount: Coin {
+            amount: SmartToken {
                 denom: "usdc".to_string(),
                 amount: "10".to_string(),
             },
@@ -671,7 +828,10 @@ mod tests {
             market_id: "market1".to_string(),
         };
         let res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
-        assert_eq!(res.attributes, vec![attr("action", "withdraw")]);
+        assert_eq!(
+            res.attributes,
+            vec![attr("action", "withdraw"), attr("amount", "0")]
+        );
     }
 
     #[test]
@@ -740,7 +900,7 @@ mod tests {
         let msg = ExecuteMsg::BuyShare {
             market_id: "market1".to_string(),
             option: "OptionA".to_string(),
-            amount: Coin {
+            amount: SmartToken {
                 denom: "usdc".to_string(),
                 amount: "10".to_string(),
             },
@@ -753,7 +913,7 @@ mod tests {
         let msg = ExecuteMsg::BuyShare {
             market_id: "market1".to_string(),
             option: "OptionA".to_string(),
-            amount: Coin {
+            amount: SmartToken {
                 denom: "usdc".to_string(),
                 amount: "2".to_string(),
             },
@@ -766,7 +926,7 @@ mod tests {
         let msg = ExecuteMsg::BuyShare {
             market_id: "market1".to_string(),
             option: "OptionB".to_string(),
-            amount: Coin {
+            amount: SmartToken {
                 denom: "usdc".to_string(),
                 amount: "6".to_string(),
             },
@@ -801,7 +961,7 @@ mod tests {
         // Verify User1's winnings
         assert_eq!(
             res.winnings,
-            Coin {
+            SmartToken {
                 denom: "usdc".to_string(),
                 amount: "5".to_string(),
             }
@@ -824,7 +984,7 @@ mod tests {
         // Verify User2's winnings
         assert_eq!(
             res.winnings,
-            Coin {
+            SmartToken {
                 denom: "usdc".to_string(),
                 amount: "1".to_string(),
             }

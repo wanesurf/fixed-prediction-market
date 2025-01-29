@@ -1,4 +1,6 @@
-use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
+use coreum_wasm_sdk::types::{
+    coreum::asset::ft::v1::QueryBalanceResponse, cosmos::base::v1beta1::Coin,
+};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Addr, Timestamp};
 
@@ -16,6 +18,12 @@ pub enum ExecuteMsg {
         options: Vec<String>,
         end_time: Timestamp,
         buy_token: String,
+        banner_url: String,
+        description: String,
+        title: String,
+        end_time_string: String,
+        start_time_string: String,
+        resolution_source: String,
     },
     BuyShare {
         market_id: String,
@@ -44,6 +52,8 @@ pub enum QueryMsg {
     GetUserPotentialWinnings { market_id: String, user: Addr }, // User's potential winnings
     #[returns(UserWinningsResponse)]
     GetUserWinnings { market_id: String, user: Addr }, // User's actual winnings
+    #[returns(QueryBalanceResponse)]
+    GetUserBalance { user: String, denom: String }, // User's balance
 }
 
 // We define a custom struct for each query response
@@ -57,12 +67,22 @@ pub struct MarketResponse {
     pub end_time: Timestamp,
     pub total_value: Coin,
     pub num_bettors: u64,
+    pub token_a: String,
+    pub token_b: String,
+    pub buy_token: String,
+    pub banner_url: String,
+    pub description: String,
+    pub title: String,
+    pub end_time_string: String,
+    pub start_time_string: String,
+    pub resolution_source: String,
 }
 #[cw_serde]
 pub struct ShareResponse {
     pub user: Addr,
     pub option: String,
     pub amount: Coin,
+    pub has_withdrawn: bool, //
 }
 #[cw_serde]
 pub struct MarketStatsResponse {
@@ -80,3 +100,11 @@ pub struct UserPotentialWinningsResponse {
 pub struct UserWinningsResponse {
     pub winnings: Coin,
 }
+
+// #[cw_serde]
+// pub struct ShareResponse {
+//     pub user: Addr,
+//     pub option: String,
+//     pub amount: Coin,
+//     pub has_withdrawn: bool, // New field to track if the user has withdrawn
+// }
