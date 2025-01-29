@@ -18,6 +18,8 @@ use coreum_wasm_sdk::types::coreum::asset::ft::v1::{
 use coreum_wasm_sdk::types::cosmos::bank::v1beta1::MsgSend;
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
 
+use cosmwasm_std::Decimal;
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
@@ -28,6 +30,8 @@ pub fn instantiate(
     let state = State {
         admin: info.sender.clone(),
         market_ids: vec![],
+        market_id_counter: 0,
+        last_market_id: 0,
     };
     STATE.save(deps.storage, &state)?;
     Ok(Response::new().add_attribute("action", "instantiate"))
@@ -198,6 +202,11 @@ pub mod execute {
             start_time_string: start_time_string,
             resolution_source: resolution_source,
         };
+
+        state.market_id_counter += 1;
+        state.last_market_id = state.market_id_counter;
+
+        STATE.save(deps.storage, &state)?;
 
         // Save the market to the MARKETS map
         MARKETS.save(deps.storage, &id, &market)?;
@@ -448,17 +457,34 @@ pub mod execute {
             )));
         }
 
-        // Calculate user's winnings
+        // Calculate commission (5%)
+        let commission_rate = Decimal::percent(5);
+
+        // Take commission from losing pool
+        let losing_pool_after_commission = total_losing_shares
+            .checked_mul_floor(Decimal::one() - commission_rate)
+            .map_err(|_| {
+                ContractError::Std(StdError::generic_err("Commission calculation error"))
+            })?;
+
+        // Calculate user's stake after commission
         let user_stake = Uint128::from_str(&user_share.token.amount)?;
+        let user_stake_after_commission = user_stake
+            .checked_mul_floor(Decimal::one() - commission_rate)
+            .map_err(|_| {
+                ContractError::Std(StdError::generic_err("Commission calculation error"))
+            })?;
+
+        // Calculate winnings
         let user_share_ratio = user_stake
             .checked_div(total_winning_shares)
             .map_err(|_| ContractError::Std(StdError::generic_err("Division by zero")))?;
 
-        // User gets their original stake back plus their proportion of the losing pool
         let winnings_from_losing_pool = user_share_ratio
-            .checked_mul(total_losing_shares)
+            .checked_mul(losing_pool_after_commission)
             .map_err(|_| ContractError::Std(StdError::generic_err("Multiplication overflow")))?;
-        let total_winnings = user_stake
+
+        let total_winnings = user_stake_after_commission
             .checked_add(winnings_from_losing_pool)
             .map_err(|_| ContractError::Std(StdError::generic_err("Addition overflow")))?;
 
