@@ -14,6 +14,8 @@ pub const MARKETS: Map<&String, Market> = Map::new("markets");
 pub struct State {
     pub admin: Addr,
     pub market_ids: Vec<String>, // Track all market IDs
+    pub market_id_counter: u64,  // Track the next market ID
+    pub last_market_id: u64,     // Track the last market ID
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

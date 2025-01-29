@@ -395,22 +395,38 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let mut market = MARKETS.load(deps.storage, &market_id)?;
 
+        // Check if market is resolved
         if !market.resolved {
             return Err(ContractError::Std(StdError::generic_err(
-                "Market is not resolved",
+                "Market is not resolved yet",
             )));
         }
 
+        // Get winning option
         let winning_option = match market.outcome {
             MarketOutcome::OptionA => &market.options[0],
             MarketOutcome::OptionB => &market.options[1],
             MarketOutcome::Unresolved => {
                 return Err(ContractError::Std(StdError::generic_err(
-                    "Market is unresolved",
+                    "Market outcome is not set",
                 )))
             }
         };
 
+        // Find user's shares first
+        let user_share = market
+            .shares
+            .iter()
+            .find(|s| s.user == info.sender && &s.option == winning_option)
+            .ok_or_else(|| StdError::generic_err("No winning shares found for user"))?;
+
+        if user_share.has_withdrawn {
+            return Err(ContractError::Std(StdError::generic_err(
+                "User has already withdrawn their winnings",
+            )));
+        }
+
+        // Now calculate totals
         let total_winning_shares: Uint128 = market
             .shares
             .iter()
@@ -425,53 +441,56 @@ pub mod execute {
             .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
             .sum();
 
-        let mut user_shares: Vec<_> = market
-            .shares
-            .iter_mut()
-            .filter(|s| s.user == info.sender && &s.option == winning_option)
-            .collect();
-
-        if user_shares.is_empty() {
-            return Err(ContractError::Std(StdError::generic_err(
-                "No shares to withdraw",
-            )));
-        }
+        // Validate there are shares to distribute
         if total_winning_shares.is_zero() {
             return Err(ContractError::Std(StdError::generic_err(
-                "No winning shares to withdraw",
+                "No winning shares in the market",
             )));
         }
 
-        let user_share_ratio =
-            user_shares[0].token.amount.parse::<Uint128>()? / total_winning_shares;
-        let user_winnings = user_share_ratio * total_losing_shares;
+        // Calculate user's winnings
+        let user_stake = Uint128::from_str(&user_share.token.amount)?;
+        let user_share_ratio = user_stake
+            .checked_div(total_winning_shares)
+            .map_err(|_| ContractError::Std(StdError::generic_err("Division by zero")))?;
 
-        // Check if the user has already withdrawn
-        if user_shares[0].has_withdrawn {
-            return Err(ContractError::Std(StdError::generic_err(
-                "User has already withdrawn",
-            )));
-        }
+        // User gets their original stake back plus their proportion of the losing pool
+        let winnings_from_losing_pool = user_share_ratio
+            .checked_mul(total_losing_shares)
+            .map_err(|_| ContractError::Std(StdError::generic_err("Multiplication overflow")))?;
+        let total_winnings = user_stake
+            .checked_add(winnings_from_losing_pool)
+            .map_err(|_| ContractError::Std(StdError::generic_err("Addition overflow")))?;
 
-        // Mark the user's shares as withdrawn
-        user_shares[0].has_withdrawn = true;
+        // Mark share as withdrawn
+        let share_index = market
+            .shares
+            .iter()
+            .position(|s| s.user == info.sender && &s.option == winning_option)
+            .unwrap();
+        market.shares[share_index].has_withdrawn = true;
 
-        // Save the updated market
+        // Save updated market state
         MARKETS.save(deps.storage, &market_id, &market)?;
 
-        let transfer_bank_msg = MsgSend {
+        // Create bank transfer message
+        let transfer_msg = MsgSend {
             from_address: env.contract.address.to_string(),
             to_address: info.sender.to_string(),
             amount: vec![Coin {
-                amount: user_winnings.to_string(),
+                amount: total_winnings.to_string(),
                 denom: market.buy_token.clone(),
             }],
         };
 
         Ok(Response::new()
-            .add_message(CosmosMsg::Any(transfer_bank_msg.to_any()))
+            .add_message(CosmosMsg::Any(transfer_msg.to_any()))
             .add_attribute("action", "withdraw")
-            .add_attribute("amount", user_winnings.to_string()))
+            .add_attribute("market_id", market_id)
+            .add_attribute("user", info.sender)
+            .add_attribute("original_stake", user_stake)
+            .add_attribute("winnings_from_pool", winnings_from_losing_pool)
+            .add_attribute("total_winnings", total_winnings))
     }
 }
 
