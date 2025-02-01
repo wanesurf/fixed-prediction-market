@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@cosmwasm/ts-codegen": "^1.12.1"
+  },
+  "scripts": {
+    "generate:sdk": "ts-node generate-sdk.ts"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2"
+  }
+}

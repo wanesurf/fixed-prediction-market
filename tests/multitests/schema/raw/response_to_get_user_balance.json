@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueryBalanceResponse",
+  "type": "object",
+  "required": [
+    "balance",
+    "frozen",
+    "locked",
+    "whitelisted"
+  ],
+  "properties": {
+    "balance": {
+      "description": "balance contains the balance with the queried account and denom",
+      "type": "string"
+    },
+    "frozen": {
+      "description": "frozen is the frozen amount of the denom on the account.",
+      "type": "string"
+    },
+    "locked": {
+      "description": "locked is the balance locked by vesting.",
+      "type": "string"
+    },
+    "whitelisted": {
+      "description": "whitelisted is the whitelisted amount of the denom on the account.",
+      "type": "string"
+    }
+  }
+}

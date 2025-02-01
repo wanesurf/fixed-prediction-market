@@ -1,14 +1,18 @@
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
-use cosmwasm_std::{Addr, Storage, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Decimal, StdError, Storage, Timestamp, Uint128};
 use cw_storage_plus::{Item, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+
+use crate::ContractError;
 // Define the storage items
 // Define the storage items
 pub const STATE: Item<State> = Item::new("state");
 //Question: is it good pratice to work with references in the storage?
 pub const MARKETS: Map<&String, Market> = Map::new("markets");
+
+pub const COMMISSION_RATE: Decimal = Decimal::percent(5);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct State {
@@ -19,18 +23,33 @@ pub struct State {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct MarketOption {
+    pub text: String, // The display text (e.g., "YES", "NO", "Trump", "Biden")
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+//directly couples an option with its corresponding token (Coin
+pub struct MarketPair {
+    pub option: MarketOption,
+    pub token: Coin,
+}
+
+// #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+// pub struct TokenInfo {
+//     pub option: MarketOption,
+//     pub denom: String,
+// }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Market {
     pub id: String,
-    pub options: Vec<String>, // Always two options (binary)
-    //TODO: make sure that we track both options/tokens for each users
-    pub shares: Vec<Share>,        // Tracks user bets
-    pub resolved: bool,            // Whether the market is resolved
-    pub outcome: MarketOutcome,    // Unresolved, OptionA, or OptionB
-    pub end_time: Timestamp,       // When the market ends
+    pub pairs: Vec<MarketPair>, //represent the options and the tokens
+    pub shares: Vec<Share>,     //represent the holder of the users
+    pub resolved: bool,
+    pub outcome: MarketOutcome,
+    pub end_time: String,          // When the market ends
     pub total_value: Coin,         // Total value staked in the market
     pub num_bettors: u64,          // Number of unique bettors
-    pub token_a: String,           // Denom for the first option
-    pub token_b: String,           // Denom for the second option
     pub buy_token: String,         // Denom for the token used to buy shares
     pub banner_url: String,        // URL for the banner image
     pub description: String,       // Description of the market
@@ -38,22 +57,23 @@ pub struct Market {
     pub end_time_string: String,   // End time of the market
     pub start_time_string: String, // Start time of the market
     pub resolution_source: String, // Source of the resolution
+                                   // pub liquidity: String,         // Liquidity of the market
+                                   //odds: <Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-//A user can only have 2 shares. Make sure that we increment or decrement on the same share when a user buys or withdraws instead of creating a new share
+//A user can only have 2 shares.We increment or decrement on the same share when a user buys or withdraws instead of creating a new share
+// We use the pair to thight the between the user and the market
 pub struct Share {
     pub user: Addr,
-    pub option: String,
-    pub token: Coin,
+    pub pair: MarketPair, //represent the option and the token
     pub has_withdrawn: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum MarketOutcome {
     Unresolved,
-    OptionA,
-    OptionB,
+    Resolved(MarketOption), // Store the winning option
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -75,45 +95,47 @@ impl Market {
         let total_a: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.option == self.options[0])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.pair.option.text == self.pairs[0].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
 
         let total_b: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.option == self.options[1])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.pair.option.text == self.pairs[1].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
 
         (total_a, total_b)
     }
 
-    pub fn calculate_odds(&self) -> (f64, f64) {
+    pub fn calculate_odds(&self) -> (Decimal, Decimal) {
         let total_a: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.option == self.options[0])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.pair.option.text == self.pairs[0].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
 
         let total_b: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.option == self.options[1])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.pair.option.text == self.pairs[1].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
 
         let odds_a = if total_a.is_zero() {
-            0.0
+            Decimal::zero()
         } else {
-            total_b.u128() as f64 / total_a.u128() as f64
+            Decimal::from_ratio(total_b, total_a)
         };
 
         let odds_b = if total_b.is_zero() {
-            0.0
+            Decimal::zero()
         } else {
-            total_a.u128() as f64 / total_b.u128() as f64
+            Decimal::from_ratio(total_a, total_b)
+            // .checked_mul(Decimal::one() - COMMISSION_RATE)
+            // .unwrap_or_default()
         };
 
         (odds_a, odds_b)
@@ -125,85 +147,69 @@ impl Market {
         let user_stake_a: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.user == *user && s.option == self.options[0])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.user == *user && s.pair.option.text == self.pairs[0].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
+
+        let user_stake_a_after_commission = Decimal::from_str(&user_stake_a.to_string())
+            .unwrap_or_default()
+            * (Decimal::one() - COMMISSION_RATE);
 
         let user_stake_b: Uint128 = self
             .shares
             .iter()
-            .filter(|s| s.user == *user && s.option == self.options[1])
-            .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
+            .filter(|s| s.user == *user && s.pair.option.text == self.pairs[1].option.text)
+            .map(|s| Uint128::from_str(&s.pair.token.amount).unwrap_or_default())
             .sum();
 
+        let user_stake_b_after_commission = Decimal::from_str(&user_stake_b.to_string())
+            .unwrap_or_default()
+            * Decimal::from_str(&(Decimal::one() - COMMISSION_RATE).to_string())
+                .unwrap_or_default();
+
+        let winnings_a = Decimal::from_str(&user_stake_a_after_commission.to_string())
+            .unwrap_or_default()
+            * Decimal::from_str(&odds_a.to_string()).unwrap_or_default();
+
+        let winnings_b = Decimal::from_str(&user_stake_b_after_commission.to_string())
+            .unwrap_or_default()
+            * Decimal::from_str(&odds_b.to_string()).unwrap_or_default();
+
+        //the payout should be in the same token as the buy_token
         let winnings_a = Coin {
-            denom: self.total_value.denom.clone(),
-            amount: Uint128::from((user_stake_a.u128() as f64 * odds_a) as u128).to_string(),
+            denom: self.buy_token.clone(),
+            amount: (winnings_a + user_stake_a_after_commission).to_string(),
         };
 
         let winnings_b = Coin {
-            denom: self.total_value.denom.clone(),
-            amount: Uint128::from((user_stake_b.u128() as f64 * odds_b) as u128).to_string(),
+            denom: self.buy_token.clone(),
+            amount: (winnings_b + user_stake_b_after_commission).to_string(),
         };
 
         (winnings_a, winnings_b)
     }
     /// Calculate the actual winnings for a user based on the market outcome
     pub fn calculate_winnings(&self, user: &Addr) -> Coin {
-        let (total_a, total_b) = self.total_stakes();
+        let (winnings_a, winnings_b) = self.calculate_potential_winnings(user);
 
-        match self.outcome {
-            MarketOutcome::OptionA => {
-                // User's stake in Option A
-                let user_stake_a: Uint128 = self
-                    .shares
-                    .iter()
-                    .filter(|s| s.user == *user && s.option == self.options[0])
-                    .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
-                    .sum();
+        //We always compare [0] wih token_a and [1] with token_b so it should be ok?
 
-                // Calculate winnings: (user_stake_a / total_a) * total_b
-                if total_a.is_zero() {
-                    return Coin {
-                        denom: self.total_value.denom.clone(),
+        match &self.outcome {
+            MarketOutcome::Unresolved => Coin {
+                denom: self.total_value.denom.clone(),
+                amount: "0".to_string(),
+            },
+            MarketOutcome::Resolved(winning_option) => {
+                if winning_option.text == self.pairs[0].option.text {
+                    winnings_a
+                } else if winning_option.text == self.pairs[1].option.text {
+                    winnings_b
+                } else {
+                    // This shouldn't happen if the market is properly maintained
+                    Coin {
+                        denom: self.buy_token.clone(),
                         amount: "0".to_string(),
-                    };
-                }
-
-                let winnings = user_stake_a * total_b / total_a;
-                Coin {
-                    denom: self.total_value.denom.clone(),
-                    amount: winnings.to_string(),
-                }
-            }
-            MarketOutcome::OptionB => {
-                // User's stake in Option B
-                let user_stake_b: Uint128 = self
-                    .shares
-                    .iter()
-                    .filter(|s| s.user == *user && s.option == self.options[1])
-                    .map(|s| Uint128::from_str(&s.token.amount).unwrap_or_default())
-                    .sum();
-
-                // Calculate winnings: (user_stake_b / total_b) * total_a
-                if total_b.is_zero() {
-                    return Coin {
-                        denom: self.total_value.denom.clone(),
-                        amount: "0".to_string(),
-                    };
-                }
-
-                let winnings = user_stake_b * total_a / total_b;
-                Coin {
-                    denom: self.total_value.denom.clone(),
-                    amount: winnings.to_string(),
-                }
-            }
-            MarketOutcome::Unresolved => {
-                // No winnings if the market is unresolved
-                Coin {
-                    denom: self.total_value.denom.clone(),
-                    amount: "0".to_string(),
+                    }
                 }
             }
         }

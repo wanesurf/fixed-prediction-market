@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UserPotentialWinningsResponse",
+  "type": "object",
+  "required": [
+    "potential_win_a",
+    "potential_win_b"
+  ],
+  "properties": {
+    "potential_win_a": {
+      "$ref": "#/definitions/Coin"
+    },
+    "potential_win_b": {
+      "$ref": "#/definitions/Coin"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Coin": {
+      "description": "Coin defines a token with a denomination and an amount.\n\nNOTE: The amount field is an Int which implements the custom method signatures required by gogoproto.",
+      "type": "object",
+      "required": [
+        "amount",
+        "denom"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "denom": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

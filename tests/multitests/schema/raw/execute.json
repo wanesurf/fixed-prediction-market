@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecuteMsg",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "create_market"
+      ],
+      "properties": {
+        "create_market": {
+          "type": "object",
+          "required": [
+            "banner_url",
+            "buy_token",
+            "description",
+            "end_time",
+            "end_time_string",
+            "id",
+            "options",
+            "resolution_source",
+            "start_time_string",
+            "title"
+          ],
+          "properties": {
+            "banner_url": {
+              "type": "string"
+            },
+            "buy_token": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "end_time": {
+              "type": "string"
+            },
+            "end_time_string": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "resolution_source": {
+              "type": "string"
+            },
+            "start_time_string": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "buy_share"
+      ],
+      "properties": {
+        "buy_share": {
+          "type": "object",
+          "required": [
+            "amount",
+            "market_id",
+            "option"
+          ],
+          "properties": {
+            "amount": {
+              "$ref": "#/definitions/Coin"
+            },
+            "market_id": {
+              "type": "string"
+            },
+            "option": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "resolve"
+      ],
+      "properties": {
+        "resolve": {
+          "type": "object",
+          "required": [
+            "market_id",
+            "winning_option"
+          ],
+          "properties": {
+            "market_id": {
+              "type": "string"
+            },
+            "winning_option": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "withdraw"
+      ],
+      "properties": {
+        "withdraw": {
+          "type": "object",
+          "required": [
+            "market_id"
+          ],
+          "properties": {
+            "market_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "Coin": {
+      "description": "Coin defines a token with a denomination and an amount.\n\nNOTE: The amount field is an Int which implements the custom method signatures required by gogoproto.",
+      "type": "object",
+      "required": [
+        "amount",
+        "denom"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "denom": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

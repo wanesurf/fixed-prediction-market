@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TotalSharesPerOptionResponse",
+  "type": "object",
+  "required": [
+    "pair_a",
+    "pair_b"
+  ],
+  "properties": {
+    "pair_a": {
+      "$ref": "#/definitions/MarketPair"
+    },
+    "pair_b": {
+      "$ref": "#/definitions/MarketPair"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Coin": {
+      "description": "Coin defines a token with a denomination and an amount.\n\nNOTE: The amount field is an Int which implements the custom method signatures required by gogoproto.",
+      "type": "object",
+      "required": [
+        "amount",
+        "denom"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "denom": {
+          "type": "string"
+        }
+      }
+    },
+    "MarketOption": {
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "MarketPair": {
+      "type": "object",
+      "required": [
+        "option",
+        "token"
+      ],
+      "properties": {
+        "option": {
+          "$ref": "#/definitions/MarketOption"
+        },
+        "token": {
+          "$ref": "#/definitions/Coin"
+        }
+      }
+    }
+  }
+}

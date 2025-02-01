@@ -2,9 +2,9 @@ use coreum_wasm_sdk::types::{
     coreum::asset::ft::v1::QueryBalanceResponse, cosmos::base::v1beta1::Coin,
 };
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Timestamp};
+use cosmwasm_std::{Addr, Decimal};
 
-use crate::state::MarketOutcome;
+use crate::state::{MarketOutcome, MarketPair};
 
 #[cw_serde]
 pub struct InstantiateMsg {
@@ -16,7 +16,7 @@ pub enum ExecuteMsg {
     CreateMarket {
         id: String,
         options: Vec<String>,
-        end_time: Timestamp,
+        end_time: String,
         buy_token: String,
         banner_url: String,
         description: String,
@@ -44,7 +44,7 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     #[returns(MarketResponse)]
     GetMarket { id: String },
-    #[returns(ShareResponse)]
+    #[returns(AllSharesResponse)]
     GetShares { market_id: String, user: Addr },
     #[returns(MarketStatsResponse)]
     GetMarketStats { market_id: String }, // Total value, number of bettors, odds
@@ -54,6 +54,15 @@ pub enum QueryMsg {
     GetUserWinnings { market_id: String, user: Addr }, // User's actual winnings
     #[returns(QueryBalanceResponse)]
     GetUserBalance { user: String, denom: String }, // User's balance
+    #[returns(AllSharesResponse)]
+    GetAllShares { market_id: String }, // All shares
+    //Get total stakes: Amount of tokens in the market PER option
+    #[returns(TotalValueResponse)]
+    GetTotalValue { market_id: String }, // Total stakes
+    #[returns(TotalSharesPerOptionResponse)]
+    GetTotalSharesPerOption { market_id: String }, // Total shares per option
+    #[returns(OddsResponse)] //TOD):rename!
+    GetOdds { market_id: String }, // Total shares per option
 }
 
 // We define a custom struct for each query response
@@ -64,11 +73,11 @@ pub struct MarketResponse {
     pub options: Vec<String>,
     pub resolved: bool,
     pub outcome: MarketOutcome,
-    pub end_time: Timestamp,
+    pub end_time: String,
     pub total_value: Coin,
     pub num_bettors: u64,
-    pub token_a: String,
-    pub token_b: String,
+    pub token_a: Coin,
+    pub token_b: Coin,
     pub buy_token: String,
     pub banner_url: String,
     pub description: String,
@@ -76,7 +85,26 @@ pub struct MarketResponse {
     pub end_time_string: String,
     pub start_time_string: String,
     pub resolution_source: String,
+    // pub liquidity: String
 }
+
+#[cw_serde]
+pub struct OddsResponse {
+    pub odds_a: Decimal,
+    pub odds_b: Decimal,
+}
+
+#[cw_serde]
+pub struct TotalValueResponse {
+    pub total_value: Coin,
+}
+
+#[cw_serde]
+pub struct TotalSharesPerOptionResponse {
+    pub pair_a: MarketPair,
+    pub pair_b: MarketPair,
+}
+
 #[cw_serde]
 pub struct ShareResponse {
     pub user: Addr,
@@ -85,11 +113,15 @@ pub struct ShareResponse {
     pub has_withdrawn: bool, //
 }
 #[cw_serde]
+pub struct AllSharesResponse {
+    pub shares: Vec<ShareResponse>,
+}
+#[cw_serde]
 pub struct MarketStatsResponse {
     pub total_value: Coin,
     pub num_bettors: u64,
-    pub odds_a: f64,
-    pub odds_b: f64,
+    pub odds_a: Decimal,
+    pub odds_b: Decimal,
 }
 #[cw_serde]
 pub struct UserPotentialWinningsResponse {
@@ -100,11 +132,3 @@ pub struct UserPotentialWinningsResponse {
 pub struct UserWinningsResponse {
     pub winnings: Coin,
 }
-
-// #[cw_serde]
-// pub struct ShareResponse {
-//     pub user: Addr,
-//     pub option: String,
-//     pub amount: Coin,
-//     pub has_withdrawn: bool, // New field to track if the user has withdrawn
-// }

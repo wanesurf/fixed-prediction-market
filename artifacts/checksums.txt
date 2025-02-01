@@ -1,1 +1,1 @@
-cb49a48b9dda1b68b54d269483d9f8b6a5eca65c5eefcf9f045bed759fbfa32b  truth_markets_contract_fixed.wasm
+17ebdb418f5a669387c068ac317999a6e4e4bcd17a465109ba72a50dc52f311c  truth_markets_contract_fixed.wasm

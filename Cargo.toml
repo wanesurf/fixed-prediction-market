@@ -32,14 +32,14 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-cosmwasm-schema = "2.2.0"
-cosmwasm-std = "=2.1.4"
-cw-storage-plus = "2.0.0"
-cw2 = "2.0.0"
+cosmwasm-schema = "1.5.5"
+cosmwasm-std = "1.5.5"
+cw-storage-plus = "1.2.0"
+cw2 = "1.1.2"
 schemars = "0.8.16"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }
-coreum-wasm-sdk = { git = "https://github.com/CoreumFoundation/coreum-wasm-sdk.git", branch = "main" }
+coreum-wasm-sdk = "0.2.4"
 tokio = { version = "1.0", default-features = false, features = [
   "sync",
   "macros",

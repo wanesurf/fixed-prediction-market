@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MarketResponse",
+  "type": "object",
+  "required": [
+    "banner_url",
+    "buy_token",
+    "description",
+    "end_time",
+    "end_time_string",
+    "id",
+    "num_bettors",
+    "options",
+    "outcome",
+    "resolution_source",
+    "resolved",
+    "start_time_string",
+    "title",
+    "token_a",
+    "token_b",
+    "total_value"
+  ],
+  "properties": {
+    "banner_url": {
+      "type": "string"
+    },
+    "buy_token": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "end_time": {
+      "type": "string"
+    },
+    "end_time_string": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "num_bettors": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "outcome": {
+      "$ref": "#/definitions/MarketOutcome"
+    },
+    "resolution_source": {
+      "type": "string"
+    },
+    "resolved": {
+      "type": "boolean"
+    },
+    "start_time_string": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "token_a": {
+      "$ref": "#/definitions/Coin"
+    },
+    "token_b": {
+      "$ref": "#/definitions/Coin"
+    },
+    "total_value": {
+      "$ref": "#/definitions/Coin"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Coin": {
+      "description": "Coin defines a token with a denomination and an amount.\n\nNOTE: The amount field is an Int which implements the custom method signatures required by gogoproto.",
+      "type": "object",
+      "required": [
+        "amount",
+        "denom"
+      ],
+      "properties": {
+        "amount": {
+          "type": "string"
+        },
+        "denom": {
+          "type": "string"
+        }
+      }
+    },
+    "MarketOption": {
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "MarketOutcome": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Unresolved"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "Resolved"
+          ],
+          "properties": {
+            "Resolved": {
+              "$ref": "#/definitions/MarketOption"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
