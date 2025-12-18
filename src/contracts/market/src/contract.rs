@@ -106,11 +106,13 @@ pub mod execute {
         banner_url: String,
         description: String,
         title: String,
-        end_time_string: String,
-        start_time_string: String,
-        resolution_source: String,
+        end_time_string: String,   //timestamp in seconds
+        start_time_string: String, //timestamp in seconds
+        resolution_source: String, //This should be the feed contract address
     ) -> Result<Response, ContractError> {
         let mut state = STATE.load(deps.storage)?;
+
+        //NOTES: Each market will cost at least 20 COREUM to create (2 FT tokens creates)
 
         // Ensure only the admin can resolve the market
         if info.sender != state.admin {
@@ -401,7 +403,7 @@ pub mod execute {
     ) -> Result<Response, ContractError> {
         let state = STATE.load(deps.storage)?;
 
-        // Ensure only the admin can resolve the market
+        // Ensure only the admin can resolve the market --> The relayer
         if info.sender != state.admin {
             return Err(ContractError::Std(StdError::generic_err(
                 "Unauthorized: Only the admin can resolve markets",

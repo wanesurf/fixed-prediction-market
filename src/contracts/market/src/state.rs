@@ -41,11 +41,20 @@ pub struct MarketPair {
 // }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+
+pub enum MarketStatus {
+    Pending,
+    Active,
+    Resolved,
+    Cancelled,
+    Expired,
+}
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Market {
     pub id: String,
     pub pairs: Vec<MarketPair>, //represent the options and the tokens
     pub shares: Vec<Share>,     //represent the holder of the users
-    pub resolved: bool,
+    pub resolved: bool,         //TODO replace by State with enum (MarketState)
     pub outcome: MarketOutcome,
     pub end_time: String,          // When the market ends
     pub total_value: Coin,         // Total value staked in the market
@@ -56,7 +65,7 @@ pub struct Market {
     pub title: String,             // Title of the market
     pub end_time_string: String,   // End time of the market
     pub start_time_string: String, // Start time of the market
-    pub resolution_source: String, // Source of the resolution
+    pub resolution_source: String, // Source of the resolution --> Feed contract address
                                    // pub liquidity: String,         // Liquidity of the market
                                    //odds: <Vec<String>>,
 }

@@ -15,7 +15,7 @@ pub struct InstantiateMsg {
 pub enum ExecuteMsg {
     CreateMarket {
         id: String,
-        options: Vec<String>,
+        options: Vec<String>, //outcomes options
         end_time: String,
         buy_token: String,
         banner_url: String,
