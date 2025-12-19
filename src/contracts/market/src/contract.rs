@@ -1,8 +1,11 @@
+use std::str::FromStr;
+
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    attr, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
 };
+use cw2::set_contract_version;
 
 //TODO: Add query_current_liquidity
 //TODO: Add query_odds
@@ -10,35 +13,145 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{Market, MarketOutcome, Share, State, MARKETS, STATE};
+use crate::state::{Config, MarketOption, MarketState, MarketStatus, Share, CONFIG, MARKET_STATE};
 use cosmwasm_std::{CosmosMsg, Uint128};
 
 //Coreum related imports
 use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgIssue;
-use coreum_wasm_sdk::types::coreum::asset::ft::v1::{
-    MsgBurn, MsgMint, QueryTokenRequest, QueryTokenResponse, Token,
-};
+use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgMint;
 
 use coreum_wasm_sdk::types::cosmos::bank::v1beta1::MsgSend;
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
 
-use cosmwasm_std::Decimal;
+use cw_utils::must_pay;
+
+// Contract name and version for migration
+const CONTRACT_NAME: &str = "crates.io:cruise-control-prediction-market";
+const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
-) -> StdResult<Response> {
-    let state = State {
-        admin: info.sender.clone(),
-        market_ids: vec![],
-        market_id_counter: 0,
-        last_market_id: 0,
+) -> Result<Response, ContractError> {
+    //NOTES: Each market will cost at least 20 COREUM to create (2 FT tokens creates)
+
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    if msg.options.len() != 2 {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Markets must have exactly two options",
+        )));
+    }
+
+    let subunit_token_a = format!(
+        "truth{}_{}",
+        msg.options[0].to_lowercase().replace(" ", "_"),
+        msg.id.to_lowercase().replace(" ", "_")
+    );
+
+    let symbol_token_a = format!(
+        "TM{}{}", // TM prefix for "Truth Markets"
+        msg.options[0].replace(" ", ""),
+        msg.id.replace(" ", "")
+    );
+
+    // Issue two new smart tokens for the market options
+    let issue_token_a = MsgIssue {
+        issuer: env.contract.address.to_string(),
+        symbol: symbol_token_a.clone(),
+        subunit: subunit_token_a.clone(),
+        precision: 6,
+        initial_amount: "0".to_string(),
+        description: format!("Token for {} in market {}", msg.options[0], msg.id),
+        //Minting & Burning is enabled
+        features: vec![0 as i32, 1 as i32],
+        burn_rate: "0".to_string(),
+        send_commission_rate: "0".to_string(),
+        uri: "https://app.cruise-control.xyz/dashboard".to_string(),
+        uri_hash: "".to_string(),
+        extension_settings: None,
+        dex_settings: None,
     };
-    STATE.save(deps.storage, &state)?;
-    Ok(Response::new().add_attribute("action", "instantiate"))
+
+    let denom_token_a: String = format!("{}-{}", subunit_token_a, env.contract.address);
+
+    let subunit_token_b = format!(
+        "truth{}_{}",
+        msg.options[1].to_lowercase().replace(" ", "_"),
+        msg.id.to_lowercase().replace(" ", "_")
+    );
+
+    let symbol_token_b = format!(
+        "TM{}{}", // TM prefix for "Truth Markets"
+        msg.options[1].replace(" ", ""),
+        msg.id.replace(" ", "")
+    );
+
+    let issue_token_b = MsgIssue {
+        issuer: env.contract.address.to_string(),
+        symbol: symbol_token_b.clone(),
+        subunit: subunit_token_b.clone(),
+        precision: 6,
+        initial_amount: "0".to_string(),
+        description: format!("Token for {} in market {}", msg.options[1], msg.id),
+        features: vec![0 as i32, 1 as i32],
+        burn_rate: "0".to_string(),
+        send_commission_rate: "0".to_string(),
+        uri: "https://app.cruise-control.xyz".to_string(),
+        uri_hash: "".to_string(),
+        extension_settings: None,
+        dex_settings: None,
+    };
+
+    let denom_token_b = format!("{}-{}", subunit_token_b, env.contract.address);
+
+    // Create MarketOption structs with associated token denoms
+    let option_a = MarketOption {
+        text: msg.options[0].clone(),
+        associated_token_denom: denom_token_a.clone(),
+    };
+
+    let option_b = MarketOption {
+        text: msg.options[1].clone(),
+        associated_token_denom: denom_token_b.clone(),
+    };
+
+    let market_state = MarketState {
+        shares: vec![],
+        status: MarketStatus::Pending,
+        num_bettors: 0,
+        total_value: Coin {
+            denom: msg.buy_token.clone(),
+            amount: "0".to_string(),
+        },
+    };
+
+    let market_config = Config {
+        id: msg.id.clone(),
+        registry_address: info.sender.clone(),
+        commission_rate: msg.commission_rate.clone(),
+        pairs: vec![option_a, option_b],
+        start_time: msg.start_time.clone(),
+        end_time: msg.end_time.clone(),
+        buy_token: msg.buy_token.clone(),
+        banner_url: msg.banner_url.clone(),
+        description: msg.description.clone(),
+        title: msg.title.clone(),
+        oracle: msg.oracle.clone(),
+        resolution_source: msg.resolution_source.clone(),
+    };
+
+    MARKET_STATE.save(deps.storage, &market_state)?;
+    CONFIG.save(deps.storage, &market_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "create_market")
+        .add_attribute("market_id", msg.id)
+        .add_message(CosmosMsg::Any(issue_token_a.to_any()))
+        .add_message(CosmosMsg::Any(issue_token_b.to_any())))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -49,467 +162,267 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::CreateMarket {
-            id,
-            options,
-            end_time,
-            buy_token,
-            banner_url,
-            description,
-            title,
-            end_time_string,
-            start_time_string,
-            resolution_source,
-        } => execute::create_market(
-            deps,
-            env,
-            info,
-            id,
-            options,
-            end_time,
-            buy_token,
-            banner_url,
-            description,
-            title,
-            end_time_string,
-            start_time_string,
-            resolution_source,
-        ),
-        ExecuteMsg::BuyShare {
-            market_id,
-            option,
-            amount,
-        } => execute::buy_share(deps, env, info, market_id, option, amount),
+        ExecuteMsg::BuyShare { market_id, option } => buy_share(deps, env, info, market_id, option),
         ExecuteMsg::Resolve {
             market_id,
             winning_option,
-        } => execute::resolve(deps, env, info, market_id, winning_option),
-        ExecuteMsg::Withdraw { market_id } => execute::withdraw(deps, env, info, market_id),
+        } => resolve(deps, env, info, market_id, winning_option),
+        ExecuteMsg::Withdraw { market_id } => withdraw(deps, env, info, market_id),
     }
 }
 
-pub mod execute {
-    use std::str::FromStr;
+/// Sell a share from a market
+///
+/// # Arguments
+///
+/// * `deps` - The dependencies
+/// * `env` - The environment
+/// * `info` - The message info
+/// * `market_id` - The market ID
+// pub fn sell_share(
+//     deps: DepsMut,
+//     env: Env,
+//     info: MessageInfo,
+//     market_id: String,
+//     option: String,
+//     amount: Coin,
+// ) -> Result<Response, ContractError> {
+//    //TODO: Update total Value on sell. (replace by liquidity)
+///  We need to create the curve that will define how much the user forfeit to the pool he is leaving based on the amount of shares he is selling and how gar we are from the end of the market
+/// market_lenght_in_sec - ( market_lenght_in_sec - 1*x )
+///
+//}
 
-    use crate::state::{MarketOption, MarketPair, COMMISSION_RATE};
+pub fn buy_share(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    _market_id: String,
+    option: String,
+) -> Result<Response, ContractError> {
+    //TODO: Update total Value on buy. (replace by liquidity)
 
-    use super::*;
+    let config = CONFIG.load(deps.storage)?;
+    let mut market_state = MARKET_STATE.load(deps.storage)?;
+    // Ensure the user sent the correct amount of tokens
 
-    pub fn create_market(
-        deps: DepsMut,
-        env: Env,
-        info: MessageInfo,
-        id: String,
-        options: Vec<String>,
-        end_time: String,
-        buy_token: String,
-        banner_url: String,
-        description: String,
-        title: String,
-        end_time_string: String,   //timestamp in seconds
-        start_time_string: String, //timestamp in seconds
-        resolution_source: String, //This should be the feed contract address
-    ) -> Result<Response, ContractError> {
-        let mut state = STATE.load(deps.storage)?;
+    let payment: Uint128 = must_pay(&info, &config.buy_token)?;
 
-        //NOTES: Each market will cost at least 20 COREUM to create (2 FT tokens creates)
-
-        // Ensure only the admin can resolve the market
-        if info.sender != state.admin {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Unauthorized: Only the admin can create markets",
-            )));
-        }
-
-        // Check if the market ID already exists
-        if MARKETS.has(deps.storage, &id) {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Market ID already exists",
-            )));
-        }
-
-        if options.len() != 2 {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Markets must have exactly two options",
-            )));
-        }
-
-        // Convert strings to MarketOption structs
-        let market_options = options
-            .iter()
-            .map(|text| MarketOption { text: text.clone() })
-            .collect::<Vec<MarketOption>>();
-
-        let subunit_token_a = format!(
-            "truth{}_{}",
-            market_options[0].text.to_lowercase().replace(" ", "_"),
-            id.to_lowercase().replace(" ", "_")
-        );
-
-        let symbol_token_a = format!(
-            "TM{}{}", // TM prefix for "Truth Markets"
-            market_options[0].text.replace(" ", ""),
-            id.replace(" ", "")
-        );
-
-        // Issue two new smart tokens for the market options
-        let issue_token_a = MsgIssue {
-            issuer: env.contract.address.to_string(),
-            symbol: symbol_token_a.clone(),
-            subunit: subunit_token_a.clone(),
-            precision: 6,
-            initial_amount: "0".to_string(),
-            description: format!("Token for {} in market {}", market_options[0].text, id),
-            //Minting & Burning is enabled
-            features: vec![0 as i32, 1 as i32],
-            burn_rate: "0".to_string(),
-            send_commission_rate: "0".to_string(),
-            uri: "https://app.cruise-control.xyz/dashboard".to_string(),
-            uri_hash: "".to_string(),
-            extension_settings: None,
-            dex_settings: None,
-        };
-
-        let denom_token_a = format!("{}-{}", subunit_token_a, env.contract.address);
-
-        let subunit_token_b = format!(
-            "truth{}_{}",
-            market_options[1].text.to_lowercase().replace(" ", "_"),
-            id.to_lowercase().replace(" ", "_")
-        );
-
-        let symbol_token_b = format!(
-            "TM{}{}", // TM prefix for "Truth Markets"
-            market_options[1].text.replace(" ", ""),
-            id.replace(" ", "")
-        );
-
-        let issue_token_b = MsgIssue {
-            issuer: env.contract.address.to_string(),
-            symbol: symbol_token_b.clone(),
-            subunit: subunit_token_b.clone(),
-            precision: 6,
-            initial_amount: "0".to_string(),
-            description: format!("Token for {} in market {}", market_options[1].text, id),
-            features: vec![0 as i32, 1 as i32],
-            burn_rate: "0".to_string(),
-            send_commission_rate: "0".to_string(),
-            uri: "https://app.cruise-control.xyz".to_string(),
-            uri_hash: "".to_string(),
-            extension_settings: None,
-            dex_settings: None,
-        };
-
-        let denom_token_b = format!("{}-{}", subunit_token_b, env.contract.address);
-
-        let token_a_info = MarketPair {
-            option: market_options[0].clone(),
-            token: Coin {
-                denom: denom_token_a,
-                amount: "0".to_string(),
-            },
-        };
-
-        let token_b_info = MarketPair {
-            option: market_options[1].clone(),
-            token: Coin {
-                denom: denom_token_b,
-                amount: "0".to_string(),
-            },
-        };
-
-        let market = Market {
-            id: id.clone(),
-            pairs: vec![token_a_info, token_b_info],
-            shares: vec![],
-            resolved: false,
-            outcome: MarketOutcome::Unresolved,
-            end_time,
-            total_value: Coin {
-                denom: buy_token.clone(),
-                amount: "0".to_string(),
-            },
-            num_bettors: 0,
-            buy_token: buy_token,
-            banner_url: banner_url,
-            description: description,
-            title: title,
-            end_time_string: end_time_string,
-            start_time_string: start_time_string,
-            resolution_source: resolution_source,
-        };
-
-        // Update the state with the new market ID
-        state.market_id_counter += 1;
-        state.last_market_id = state.market_id_counter;
-        state.admin = info.sender;
-        state.market_ids.push(id.clone());
-
-        STATE.save(deps.storage, &state)?;
-        MARKETS.save(deps.storage, &id, &market)?;
-
-        Ok(Response::new()
-            .add_attribute("action", "create_market")
-            .add_attribute("market_id", id)
-            .add_message(CosmosMsg::Any(issue_token_a.to_any()))
-            .add_message(CosmosMsg::Any(issue_token_b.to_any())))
+    // Check if the market is already resolved
+    if matches!(market_state.status, MarketStatus::Resolved(_)) {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Market is already resolved",
+        )));
     }
 
-    pub fn buy_share(
-        deps: DepsMut,
-        env: Env,
-        info: MessageInfo,
-        market_id: String,
-        option: String,
-        amount: Coin,
-    ) -> Result<Response, ContractError> {
-        //TODO: Update total Value on buy. (replace by liquidity)
+    // Find the matching market pair
+    let market_option = config
+        .pairs
+        .iter()
+        .find(|p| p.text == option)
+        .cloned()
+        .ok_or_else(|| StdError::generic_err("Invalid option"))?;
 
-        let mut market = MARKETS.load(deps.storage, &market_id)?;
+    // Find existing shares for this user
+    let mut user_shares: Vec<_> = market_state
+        .shares
+        .iter_mut()
+        .filter(|s| s.user == info.sender)
+        .collect();
 
-        // Ensure the user sent the correct amount of tokens
-        let sent_funds = info
-            .funds
-            .iter()
-            .find(|coin| coin.denom == market.buy_token)
-            .ok_or_else(|| ContractError::Std(StdError::generic_err("No tokens sent")))?;
-
-        // Check if the amount matches (anyway we only mint based on the funds sent)
-        if sent_funds.amount.to_string() != amount.amount {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Incorrect amount of tokens sent",
-            )));
+    match user_shares.len() {
+        0 => {
+            // User has no shares, create a new one
+            let share = Share {
+                user: info.sender.clone(),
+                option: market_option.clone(),
+                amount: payment,
+                has_withdrawn: false,
+            };
+            market_state.shares.push(share);
+            market_state.num_bettors += 1;
         }
-
-        // Check if the market is already resolved
-        if market.resolved {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Market is already resolved",
-            )));
-        }
-
-        // Find the matching market pair
-        let market_pair_to_buy = market
-            .pairs
-            .iter()
-            .find(|p| p.option.text == option)
-            .cloned()
-            .ok_or_else(|| StdError::generic_err("Invalid option"))?;
-
-        // Find existing shares for this user
-        let mut user_shares: Vec<_> = market
-            .shares
-            .iter_mut()
-            .filter(|s| s.user == info.sender)
-            .collect();
-
-        match user_shares.len() {
-            0 => {
-                // User has no shares, create a new one
-                let mut user_market_pair = market_pair_to_buy.clone();
-                user_market_pair.token.amount = amount.amount; // Set the amount from user's purchase
+        1 => {
+            // User has one share
+            let existing_share = &mut user_shares[0];
+            if existing_share.option.text == market_option.text {
+                // Same option - update amount
+                existing_share.amount += payment;
+            } else {
+                // User had one share for the other option, now buying a different option
                 let share = Share {
                     user: info.sender.clone(),
-                    pair: user_market_pair,
+                    option: market_option.clone(),
+                    amount: payment,
                     has_withdrawn: false,
                 };
-                market.shares.push(share);
+                market_state.shares.push(share);
             }
-            1 => {
-                // User has one share
-                let existing_share = &mut user_shares[0];
-                if existing_share.pair.option.text == market_pair_to_buy.option.text {
-                    // Same option - update amount
-                    existing_share.pair.token.amount =
-                        (Uint128::from_str(&existing_share.pair.token.amount).unwrap()
-                            + Uint128::from_str(&amount.amount).unwrap())
-                        .to_string();
-                } else {
-                    // User had one pair but it was from buying the other option
-                    let mut user_market_pair = market_pair_to_buy.clone();
-                    user_market_pair.token.amount = amount.amount; // Set the amount from user's purchase
-                    let share = Share {
-                        user: info.sender.clone(),
-                        pair: user_market_pair,
-                        has_withdrawn: false,
-                    };
-                    market.shares.push(share);
-                }
-            }
-            2 => {
-                // User already has two shares
-                let matching_share = user_shares
-                    .iter_mut()
-                    .find(|s| s.pair.option.text == market_pair_to_buy.option.text);
+        }
+        2 => {
+            // User already has two shares
+            let matching_share = user_shares
+                .iter_mut()
+                .find(|s| s.option.text == market_option.text);
 
-                if let Some(share) = matching_share {
-                    // Update existing share for the same option
-                    share.pair.token.amount = (Uint128::from_str(&share.pair.token.amount)
-                        .unwrap()
-                        + Uint128::from_str(&amount.amount).unwrap())
-                    .to_string();
-                } else {
-                    return Err(ContractError::Std(StdError::generic_err(
-                        "User already has two shares with different options",
-                    )));
-                }
-            }
-            _ => {
+            if let Some(share) = matching_share {
+                // Update existing share for the same option
+                share.amount += payment;
+            } else {
+                ///TODO: this should never happen
                 return Err(ContractError::Std(StdError::generic_err(
-                    "Invalid state: User has more than 2 shares",
+                    "User already has two shares with different options",
                 )));
             }
         }
-
-        //increase the value of the pair internally
-        market
-            .pairs
-            .iter_mut()
-            .find(|p| p.option.text == market_pair_to_buy.option.text)
-            .unwrap()
-            .token
-            .amount = (Uint128::from_str(&market_pair_to_buy.token.amount).unwrap()
-            + &sent_funds.amount)
-            .to_string();
-
-        let mint_msg = MsgMint {
-            sender: env.contract.address.to_string(),
-            coin: Some(Coin {
-                denom: market_pair_to_buy.token.denom.clone(),
-                amount: sent_funds.amount.to_string(),
-            }),
-            recipient: info.sender.to_string(),
-        };
-        // Update total Value on buy
-        let new_total_value =
-            Uint128::from_str(&market.total_value.amount).unwrap() + (&sent_funds.amount);
-
-        market.total_value.amount = new_total_value.to_string();
-
-        // Save the updated market
-        MARKETS.save(deps.storage, &market_id, &market)?;
-
-        Ok(Response::new()
-            .add_attribute("action", "buy_share")
-            .add_message(CosmosMsg::Any(mint_msg.to_any())))
-    }
-
-    pub fn resolve(
-        deps: DepsMut,
-        env: Env,
-        info: MessageInfo,
-        market_id: String,
-        winning_option: String,
-    ) -> Result<Response, ContractError> {
-        let state = STATE.load(deps.storage)?;
-
-        // Ensure only the admin can resolve the market --> The relayer
-        if info.sender != state.admin {
+        _ => {
             return Err(ContractError::Std(StdError::generic_err(
-                "Unauthorized: Only the admin can resolve markets",
+                "Invalid state: User has more than 2 shares",
             )));
         }
-
-        let mut market = MARKETS.load(deps.storage, &market_id)?;
-
-        // Check if the market has ended
-        // if env.block.time < market.end_time {
-        //     return Err(ContractError::Std(StdError::generic_err(
-        //         "Market has not ended yet",
-        //     )));
-        // }
-
-        // Check if the market is already resolved
-        if market.resolved {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Market is already resolved",
-            )));
-        }
-
-        let winning_pair = market
-            .pairs
-            .iter()
-            .find(|p| p.option.text == winning_option)
-            .cloned()
-            .ok_or_else(|| StdError::generic_err("Invalid winning option"))?;
-
-        // Update the market outcome
-        market.resolved = true;
-        market.outcome = MarketOutcome::Resolved(winning_pair.option);
-
-        // Save the updated market
-        MARKETS.save(deps.storage, &market_id, &market)?;
-
-        Ok(Response::new().add_attribute("action", "resolve"))
     }
 
-    pub fn withdraw(
-        deps: DepsMut,
-        env: Env,
-        info: MessageInfo,
-        market_id: String,
-    ) -> Result<Response, ContractError> {
-        //TODO: Update total Value on withdraw. (replace by liquidity)
+    let mint_msg = MsgMint {
+        sender: env.contract.address.to_string(),
+        coin: Some(Coin {
+            denom: market_option.associated_token_denom.clone(),
+            amount: payment.to_string(),
+        }),
+        recipient: info.sender.to_string(),
+    };
+    // Update total Value on buy
+    let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + (&payment);
 
-        let mut market = MARKETS.load(deps.storage, &market_id)?;
+    market_state.total_value.amount = new_total_value.to_string();
 
-        // Check if market is resolved
-        if !market.resolved {
+    // Save the updated market state
+    MARKET_STATE.save(deps.storage, &market_state)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "buy_share")
+        .add_message(CosmosMsg::Any(mint_msg.to_any())))
+}
+
+pub fn resolve(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    _market_id: String,
+    winning_option: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    let mut market_state = MARKET_STATE.load(deps.storage)?;
+
+    // Ensure only the admin can resolve the market --> The relayer
+    if info.sender != config.registry_address {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Unauthorized: Only the admin can resolve markets",
+        )));
+    }
+
+    // Check if the market has ended
+    // if env.block.time < market.end_time {
+    //     return Err(ContractError::Std(StdError::generic_err(
+    //         "Market has not ended yet",
+    //     )));
+    // }
+
+    // Check if the market is already resolved
+    if matches!(market_state.status, MarketStatus::Resolved(_)) {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Market is already resolved",
+        )));
+    }
+
+    let winning_option_obj = config
+        .pairs
+        .iter()
+        .find(|p| p.text == winning_option)
+        .cloned()
+        .ok_or_else(|| StdError::generic_err("Invalid winning option"))?;
+
+    // Update the market status with the winning option
+    market_state.status = MarketStatus::Resolved(winning_option_obj);
+
+    // Save the updated market state
+    MARKET_STATE.save(deps.storage, &market_state)?;
+
+    Ok(Response::new().add_attribute("action", "resolve"))
+}
+
+pub fn withdraw(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    market_id: String,
+) -> Result<Response, ContractError> {
+    //TODO: Update total Value on withdraw. (replace by liquidity)
+    // TODO: check that the right option token is being sent and burn it
+
+    // 1) The market stops accepting bets
+    // 2) The market is resolved
+    // 3) The user withdraws their winnings
+
+    let config = CONFIG.load(deps.storage)?;
+    let mut market_state = MARKET_STATE.load(deps.storage)?;
+
+    // Get winning option (also checks if market is resolved)
+    let winning_option = match &market_state.status {
+        MarketStatus::Resolved(option) => option,
+        _ => {
             return Err(ContractError::Std(StdError::generic_err(
                 "Market is not resolved yet",
-            )));
+            )))
         }
+    };
 
-        // Get winning option
-        let winning_option = match &market.outcome {
-            MarketOutcome::Resolved(option) => option,
-            MarketOutcome::Unresolved => {
-                return Err(ContractError::Std(StdError::generic_err(
-                    "Market outcome is not set",
-                )))
-            }
-        };
+    //we're checking that the user sent the winning token denom to withdraw their winnings
+    let amount: Uint128 = must_pay(&info, &winning_option.associated_token_denom)?;
 
-        // Find user's shares first
-        let share_index = market
-            .shares
-            .iter()
-            .position(|s| s.user == info.sender && s.pair.option.text == winning_option.text)
-            .ok_or_else(|| StdError::generic_err("No winning shares found for user"))?;
+    // Find user's shares first
+    let share_index = market_state
+        .shares
+        .iter()
+        .position(|s| s.user == info.sender && s.option.text == winning_option.text)
+        .ok_or_else(|| StdError::generic_err("No winning shares found for user"))?;
 
-        if market.shares[share_index].has_withdrawn {
-            return Err(ContractError::Std(StdError::generic_err(
-                "User has already withdrawn their winnings",
-            )));
-        }
-
-        // Mark share as withdrawn
-        market.shares[share_index].has_withdrawn = true;
-
-        //TODO: Replace the logic with a Market impl method
-
-        let total_winnings = market.calculate_winnings(&info.sender);
-
-        // Save updated market state
-        MARKETS.save(deps.storage, &market_id, &market)?;
-
-        // Create bank transfer message
-        let transfer_msg = MsgSend {
-            from_address: env.contract.address.to_string(),
-            to_address: info.sender.to_string(),
-            amount: vec![Coin {
-                amount: total_winnings.amount.clone(),
-                denom: total_winnings.denom,
-            }],
-        };
-
-        Ok(Response::new()
-            .add_message(CosmosMsg::Any(transfer_msg.to_any()))
-            .add_attribute("action", "withdraw")
-            .add_attribute("market_id", market_id)
-            .add_attribute("user", info.sender)
-            .add_attribute("total_winnings", total_winnings.amount))
+    if market_state.shares[share_index].has_withdrawn {
+        return Err(ContractError::Std(StdError::generic_err(
+            "User has already withdrawn their winnings",
+        )));
     }
+
+    // Mark share as withdrawn
+    market_state.shares[share_index].has_withdrawn = true;
+
+    let total_winnings = market_state.calculate_winnings(&info.sender, &config);
+
+    // Save updated market state
+    MARKET_STATE.save(deps.storage, &market_state)?;
+
+    // total_winning_amount should be equal to the amount the user sent to withdraw
+    if total_winnings.amount != amount.to_string() {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Total winnings do not match the amount sent to withdraw",
+        )));
+    }
+
+    // Create bank transfer message
+    let transfer_msg = MsgSend {
+        from_address: env.contract.address.to_string(),
+        to_address: info.sender.to_string(),
+        amount: vec![Coin {
+            amount: total_winnings.amount.clone(),
+            denom: total_winnings.denom,
+        }],
+    };
+
+    Ok(Response::new()
+        .add_message(CosmosMsg::Any(transfer_msg.to_any()))
+        .add_attribute("action", "withdraw")
+        .add_attribute("market_id", market_id)
+        .add_attribute("user", info.sender)
+        .add_attribute("total_winnings", total_winnings.amount))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -534,13 +447,13 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetAllShares { market_id } => {
             to_json_binary(&query::query_all_shares(deps, market_id)?)
         }
-        QueryMsg::GetTotalValue { market_id } => {
-            to_json_binary(&query::query_total_value(deps, market_id)?)
+        QueryMsg::GetTotalValue { market_id: _ } => {
+            to_json_binary(&query::query_total_value(deps)?)
         }
         QueryMsg::GetTotalSharesPerOption { market_id } => {
             to_json_binary(&query::query_total_shares_per_option(deps, market_id)?)
         }
-        QueryMsg::GetOdds { market_id } => to_json_binary(&query::query_odds(deps, market_id)?),
+        QueryMsg::GetOdds { market_id: _ } => to_json_binary(&query::query_odds(deps)?),
     }
 }
 pub mod query {
@@ -557,77 +470,110 @@ pub mod query {
 
     use super::*;
 
-    pub fn query_odds(deps: Deps, market_id: String) -> StdResult<OddsResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
-        let (odds_a, odds_b) = market.calculate_odds();
+    pub fn query_odds(deps: Deps) -> StdResult<OddsResponse> {
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
+        let (odds_a, odds_b) = market_state.calculate_odds(&config);
         Ok(OddsResponse { odds_a, odds_b })
     }
 
-    pub fn query_total_value(deps: Deps, market_id: String) -> StdResult<TotalValueResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
+    pub fn query_total_value(deps: Deps) -> StdResult<TotalValueResponse> {
+        let market_state = MARKET_STATE.load(deps.storage)?;
 
         Ok(TotalValueResponse {
-            total_value: market.total_value,
+            total_value: market_state.total_value,
         })
     }
 
     pub fn query_total_shares_per_option(
         deps: Deps,
-        market_id: String,
+        _market_id: String,
     ) -> StdResult<TotalSharesPerOptionResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
+        let (total_a, total_b) = market_state.total_stakes(&config);
+
         Ok(TotalSharesPerOptionResponse {
-            pair_a: market.pairs[0].clone(),
-            pair_b: market.pairs[1].clone(),
+            option_a: config.pairs[0].clone(),
+            amount_a: Coin {
+                denom: config.buy_token.clone(),
+                amount: total_a.to_string(),
+            },
+            option_b: config.pairs[1].clone(),
+            amount_b: Coin {
+                denom: config.buy_token.clone(),
+                amount: total_b.to_string(),
+            },
         })
     }
 
-    pub fn query_all_shares(deps: Deps, market_id: String) -> StdResult<AllSharesResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
-        let shares: Vec<ShareResponse> = market
+    pub fn query_all_shares(deps: Deps, _market_id: String) -> StdResult<AllSharesResponse> {
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
+
+        let shares: Vec<ShareResponse> = market_state
             .shares
             .iter()
             .map(|s| ShareResponse {
                 user: s.user.clone(),
-                option: s.pair.option.text.clone(),
-                amount: s.pair.token.clone(),
+                option: s.option.text.clone(),
+                amount: Coin {
+                    denom: config.buy_token.clone(),
+                    amount: s.amount.to_string(),
+                },
                 has_withdrawn: s.has_withdrawn,
             })
             .collect();
         Ok(AllSharesResponse { shares })
     }
 
-    pub fn query_market(deps: Deps, id: String) -> StdResult<MarketResponse> {
-        let market = MARKETS.load(deps.storage, &id)?;
+    pub fn query_market(deps: Deps, _id: String) -> StdResult<MarketResponse> {
+        let config = CONFIG.load(deps.storage)?;
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let (total_a, total_b) = market_state.total_stakes(&config);
+
         Ok(MarketResponse {
-            id: market.id,
-            options: market.pairs.iter().map(|p| p.option.text.clone()).collect(),
-            resolved: market.resolved,
-            outcome: market.outcome,
-            end_time: market.end_time,
-            total_value: market.total_value,
-            num_bettors: market.num_bettors,
-            token_a: market.pairs[0].token.clone(),
-            token_b: market.pairs[1].token.clone(),
-            buy_token: market.buy_token,
-            banner_url: market.banner_url,
-            description: market.description,
-            title: market.title,
-            end_time_string: market.end_time_string,
-            start_time_string: market.start_time_string,
-            resolution_source: market.resolution_source,
+            id: config.id,
+            options: config.pairs.iter().map(|p| p.text.clone()).collect(),
+            status: market_state.status,
+            total_value: market_state.total_value,
+            num_bettors: market_state.num_bettors,
+            token_a: Coin {
+                denom: config.pairs[0].associated_token_denom.clone(),
+                amount: total_a.to_string(),
+            },
+            token_b: Coin {
+                denom: config.pairs[1].associated_token_denom.clone(),
+                amount: total_b.to_string(),
+            },
+            buy_token: config.buy_token,
+            banner_url: config.banner_url,
+            description: config.description,
+            title: config.title,
+            end_time: config.end_time,
+            start_time: config.start_time,
+            resolution_source: config.resolution_source,
         })
     }
-    pub fn query_shares(deps: Deps, market_id: String, user: Addr) -> StdResult<AllSharesResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
-        let user_shares: Vec<ShareResponse> = market
+    pub fn query_shares(
+        deps: Deps,
+        _market_id: String,
+        user: Addr,
+    ) -> StdResult<AllSharesResponse> {
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
+
+        let user_shares: Vec<ShareResponse> = market_state
             .shares
             .iter()
             .filter(|s| s.user == user)
             .map(|s| ShareResponse {
                 user: s.user.clone(),
-                option: s.pair.option.text.clone(),
-                amount: s.pair.token.clone(),
+                option: s.option.text.clone(),
+                amount: Coin {
+                    denom: config.buy_token.clone(),
+                    amount: s.amount.to_string(),
+                },
                 has_withdrawn: s.has_withdrawn,
             })
             .collect();
@@ -635,14 +581,15 @@ pub mod query {
             shares: user_shares,
         })
     }
-    pub fn query_market_stats(deps: Deps, market_id: String) -> StdResult<MarketStatsResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
+    pub fn query_market_stats(deps: Deps, _market_id: String) -> StdResult<MarketStatsResponse> {
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
 
-        let (odds_a, odds_b) = market.calculate_odds();
+        let (odds_a, odds_b) = market_state.calculate_odds(&config);
 
         Ok(MarketStatsResponse {
-            total_value: market.total_value,
-            num_bettors: market.num_bettors,
+            total_value: market_state.total_value,
+            num_bettors: market_state.num_bettors,
             odds_a,
             odds_b,
         })
@@ -650,13 +597,14 @@ pub mod query {
 
     pub fn query_user_potential_winnings(
         deps: Deps,
-        market_id: String,
+        _market_id: String,
         user: Addr,
     ) -> StdResult<UserPotentialWinningsResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
 
         // Handle the result of calculate_potential_winnings
-        let (winnings_a, winnings_b) = market.calculate_potential_winnings(&user); // Directly propagate ContractError
+        let (winnings_a, winnings_b) = market_state.calculate_potential_winnings(&user, &config);
 
         Ok(UserPotentialWinningsResponse {
             potential_win_a: winnings_a,
@@ -665,11 +613,12 @@ pub mod query {
     }
     pub fn query_user_winnings(
         deps: Deps,
-        market_id: String,
+        _market_id: String,
         user: Addr,
     ) -> StdResult<UserWinningsResponse> {
-        let market = MARKETS.load(deps.storage, &market_id)?;
-        let winnings = market.calculate_winnings(&user);
+        let market_state = MARKET_STATE.load(deps.storage)?;
+        let config = CONFIG.load(deps.storage)?;
+        let winnings = market_state.calculate_winnings(&user, &config);
         Ok(UserWinningsResponse { winnings })
     }
     pub fn query_balance(

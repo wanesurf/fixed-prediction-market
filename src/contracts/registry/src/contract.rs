@@ -1,19 +1,17 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, to_json_binary};
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
+use cw2::set_contract_version;
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{Config, CONFIG};
 use crate::execute;
-use crate::query;
+use crate::msg::{ExecuteMsg, InstantiateMsg};
+use crate::state::{Config, CONFIG};
 
-/*
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:registry";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-*/
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -22,10 +20,12 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
     let config = Config {
         admin: info.sender.clone(),
         oracle: msg.oracle,
-        buy_fee: msg.buy_fee,
+        commission_rate: msg.commission_rate,
         market_code_id: msg.market_code_id,
     };
     CONFIG.save(deps.storage, &config)?;
@@ -46,40 +46,28 @@ pub fn execute(
         ExecuteMsg::CreateMarket {
             id,
             options,
-            end_time,
             buy_token,
             banner_url,
             description,
             title,
-            end_time_string,
-            start_time_string,
+            start_time,
+            end_time,
             resolution_source,
+            oracle,
         } => execute::execute_create_market(
             deps,
             env,
             info,
             id,
             options,
-            end_time,
             buy_token,
             banner_url,
             description,
             title,
-            end_time_string,
-            start_time_string,
+            start_time,
+            end_time,
             resolution_source,
+            oracle,
         ),
     }
 }
-
-#[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
-    match msg {
-        QueryMsg::GetConfig {} => to_json_binary(&query::query_config(deps)?),
-        QueryMsg::Market { market_id } => to_json_binary(&query::query_market(deps, market_id)?),
-        QueryMsg::ListMarkets {} => to_json_binary(&query::query_list_markets(deps)?),
-    }
-}
-
-#[cfg(test)]
-mod tests {}

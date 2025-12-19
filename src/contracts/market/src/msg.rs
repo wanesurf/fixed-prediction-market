@@ -2,33 +2,30 @@ use coreum_wasm_sdk::types::{
     coreum::asset::ft::v1::QueryBalanceResponse, cosmos::base::v1beta1::Coin,
 };
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Decimal};
+use cosmwasm_std::{Addr, Decimal, Timestamp};
 
-use crate::state::{MarketOutcome, MarketPair};
+use crate::state::{MarketOption, MarketStatus};
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub buy_denom: String, // The denomination required to buy shares
+    pub id: String,
+    pub options: Vec<String>, //outcomes options
+    pub start_time: Timestamp,
+    pub end_time: Timestamp,
+    pub commission_rate: Decimal,
+    pub buy_token: String,
+    pub banner_url: String,
+    pub description: String,
+    pub title: String,
+    pub resolution_source: String,
+    pub oracle: Addr,
 }
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    CreateMarket {
-        id: String,
-        options: Vec<String>, //outcomes options
-        end_time: String,
-        buy_token: String,
-        banner_url: String,
-        description: String,
-        title: String,
-        end_time_string: String,
-        start_time_string: String,
-        resolution_source: String,
-    },
     BuyShare {
         market_id: String,
         option: String,
-        amount: Coin,
     },
     Resolve {
         market_id: String,
@@ -71,9 +68,7 @@ pub enum QueryMsg {
 pub struct MarketResponse {
     pub id: String,
     pub options: Vec<String>,
-    pub resolved: bool,
-    pub outcome: MarketOutcome,
-    pub end_time: String,
+    pub status: MarketStatus,
     pub total_value: Coin,
     pub num_bettors: u64,
     pub token_a: Coin,
@@ -82,8 +77,8 @@ pub struct MarketResponse {
     pub banner_url: String,
     pub description: String,
     pub title: String,
-    pub end_time_string: String,
-    pub start_time_string: String,
+    pub end_time: Timestamp,
+    pub start_time: Timestamp,
     pub resolution_source: String,
     // pub liquidity: String
 }
@@ -101,8 +96,10 @@ pub struct TotalValueResponse {
 
 #[cw_serde]
 pub struct TotalSharesPerOptionResponse {
-    pub pair_a: MarketPair,
-    pub pair_b: MarketPair,
+    pub option_a: MarketOption,
+    pub amount_a: Coin,
+    pub option_b: MarketOption,
+    pub amount_b: Coin,
 }
 
 #[cw_serde]

@@ -20,6 +20,11 @@ tokio = { version = "1.0", default-features = false, features = [
 ] }
 coreum-test-tube = "5.0.0"
 cw-ownable = { version = "2.1.0" }
+cw-utils = { version = "2.0.0" }
+market = { path = "src/contracts/market" }
+registry = { path = "src/contracts/registry" }
+utils = { path = "src/packages/utils" }
+sha2 = { version = "0.10.9" }
 
 
 [profile.release]

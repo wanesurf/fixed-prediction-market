@@ -29,7 +29,10 @@ schemars = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 cw-ownable = { workspace = true }
-
+cw-utils = { version = "2.0.0" }
+market = { workspace = true, features = ["library"] }
+utils = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 cw-multi-test = "2.0.0"

@@ -1,19 +1,10 @@
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, StdError, Storage, Timestamp, Uint128};
-use cw_storage_plus::{Item, Map};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use cosmwasm_std::{Addr, Decimal, Timestamp, Uint128};
+use cw_storage_plus::Item;
 use std::str::FromStr;
 
-use crate::ContractError;
-// Define the storage items
-// Define the storage items
-//Question: is it good pratice to work with references in the storage?
-
-pub const COMMISSION_RATE: Decimal = Decimal::percent(5);
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct State {
     pub admin: Addr,
     pub market_ids: Vec<String>, // Track all market IDs
@@ -21,7 +12,7 @@ pub struct State {
     pub last_market_id: u64,     // Track the last market ID
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct MarketOption {
     pub text: String, // The display text (e.g., "YES", "NO", "Trump", "Biden")
     pub associated_token_denom: String,
@@ -41,37 +32,36 @@ pub enum MarketStatus {
     Resolved(MarketOption), // Market resolved with winning option
     Cancelled,              // Market was cancelled
 }
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct Config {
     pub id: String,
     pub registry_address: Addr,
-    pub pairs: Vec<MarketOption>,  //represent the options and the tokens
-    pub end_time: String,          // When the market ends
-    pub buy_token: String,         // Denom for the token used to buy shares
-    pub banner_url: String,        // URL for the banner image
-    pub description: String,       // Description of the market
-    pub title: String,             // Title of the market
-    pub end_time_string: String,   // End time of the market
-    pub start_time_string: String, // Start time of the market
+    pub commission_rate: Decimal,
+    pub pairs: Vec<MarketOption>, //represent the options and the tokens
+    pub buy_token: String,        // Denom for the token used to buy shares
+    pub banner_url: String,       // URL for the banner image
+    pub description: String,      // Description of the market
+    pub title: String,            // Title of the market
+    pub start_time: Timestamp,    // Start time of the market
+    pub end_time: Timestamp,      // End time of the market
+    pub oracle: Addr,
     pub resolution_source: String, // Source of the resolution --> Feed contract address
-                                   // pub liquidity: String,         // Liquidity of the market
-                                   //odds: <Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct MarketState {
     pub shares: Vec<Share>,
     pub status: MarketStatus, // Combined status and outcome
     pub total_value: Coin,
     pub num_bettors: u64, // Number of unique bettors
+                          //TODO: add odds directly so we dont have to calculate them on the fly
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const MARKET_STATE: Item<MarketState> = Item::new("market_state");
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-//A user can only have 2 shares.We increment or decrement on the same share when a user buys or withdraws instead of creating a new share
-// We use the option to reference which market option this share is for
+#[cw_serde] //A user can only have 2 shares.We increment or decrement on the same share when a user buys or withdraws instead of creating a new share
+            // We use the option to reference which market option this share is for
 pub struct Share {
     pub user: Addr,
     pub option: MarketOption, // References which option from Config.pairs
@@ -79,7 +69,7 @@ pub struct Share {
     pub has_withdrawn: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct MarketStatsResponse {
     pub total_value: Coin,
     pub num_bettors: u64,
@@ -87,7 +77,7 @@ pub struct MarketStatsResponse {
     pub odds_b: f64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct UserWinningsResponse {
     pub winnings: Coin,
 }
@@ -156,7 +146,7 @@ impl MarketState {
 
         let user_stake_a_after_commission = Decimal::from_str(&user_stake_a.to_string())
             .unwrap_or_default()
-            * (Decimal::one() - COMMISSION_RATE);
+            * (Decimal::one() - config.commission_rate);
 
         let user_stake_b: Uint128 = self
             .shares
@@ -167,7 +157,7 @@ impl MarketState {
 
         let user_stake_b_after_commission = Decimal::from_str(&user_stake_b.to_string())
             .unwrap_or_default()
-            * Decimal::from_str(&(Decimal::one() - COMMISSION_RATE).to_string())
+            * Decimal::from_str(&(Decimal::one() - config.commission_rate).to_string())
                 .unwrap_or_default();
 
         let winnings_a = Decimal::from_str(&user_stake_a_after_commission.to_string())
