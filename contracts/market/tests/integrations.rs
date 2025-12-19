@@ -9,8 +9,8 @@ mod tests {
     use cosmwasm_std::{coin, Addr, Decimal, Timestamp, Uint128};
     use market::msg::{
         AllSharesResponse, ExecuteMsg, MarketResponse, MarketStatsResponse, OddsResponse, QueryMsg,
-        TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse,
-        UserWinningsResponse,
+        SimulateSellResponse, TaxRateResponse, TotalSharesPerOptionResponse, TotalValueResponse,
+        UserPotentialWinningsResponse, UserWinningsResponse,
     };
     use market::state::MarketStatus;
     use registry::msg::{
@@ -22,6 +22,17 @@ mod tests {
     const FEE_DENOM: &str = "ucore";
     const BUY_TOKEN: &str = "uusdc";
     const COMMISSION_RATE: f64 = 0.05;
+
+    // Helper function to get current timestamp
+    fn get_start_time() -> Timestamp {
+        Timestamp::from_seconds(Utc::now().timestamp() as u64)
+    }
+
+    // Helper function to get end time (1 day from now)
+    fn get_end_time() -> Timestamp {
+        let now = Timestamp::from_seconds(Utc::now().timestamp() as u64);
+        now.plus_seconds(3600 * 24 * 1)
+    }
 
     fn setup_registry_and_market(
         wasm: &Wasm<'_, CoreumTestApp>,
@@ -61,10 +72,6 @@ mod tests {
             .data
             .address;
 
-        let now = Timestamp::from_seconds(Utc::now().timestamp() as u64);
-        let end_time = now.plus_seconds(3600 * 24 * 1); // 1 days from now
-                                                        // let start_time = now.minus_seconds(3600 * 24 * 30); // 30 days ago
-
         // Create market through registry
         let create_market_res = wasm
             .execute(
@@ -72,8 +79,8 @@ mod tests {
                 &RegistryExecuteMsg::CreateMarket {
                     id: "test_market_1".to_string(),
                     options: vec!["Yes".to_string(), "No".to_string()],
-                    start_time: now,
-                    end_time: end_time,
+                    start_time: get_start_time(),
+                    end_time: get_end_time(),
                     buy_token: BUY_TOKEN.to_string(),
                     banner_url: "https://example.com/banner.png".to_string(),
                     description: "Test prediction market for integration testing".to_string(),
@@ -1219,5 +1226,337 @@ mod tests {
             .amount;
 
         assert_eq!(user_b_final_token_balance, "1500");
+    }
+
+    #[test]
+    fn test_time_based_tax_calculation() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+        let bank = Bank::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // User1 buys shares
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, BUY_TOKEN)],
+            &user1,
+        )
+        .unwrap();
+
+        // Get market info
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Test selling immediately (should have low tax)
+        let sell_res_early = wasm
+            .execute(
+                &market_address,
+                &ExecuteMsg::SellShare {
+                    option: "Yes".to_string(),
+                },
+                &[coin(200, &market.token_a.denom)], // Sell 200 tokens
+                &user1,
+            )
+            .unwrap();
+
+        // Verify early sell has low tax
+        let tax_rate_early = sell_res_early
+            .events
+            .iter()
+            .find(|e| e.ty == "wasm")
+            .unwrap()
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "tax_rate")
+            .unwrap()
+            .value
+            .clone();
+
+        let amount_after_tax_early = sell_res_early
+            .events
+            .iter()
+            .find(|e| e.ty == "wasm")
+            .unwrap()
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "amount_after_tax")
+            .unwrap()
+            .value
+            .clone();
+
+        println!("Early sell tax rate: {}", tax_rate_early);
+        println!("Early sell amount after tax: {}", amount_after_tax_early);
+
+        // Tax rate should be very low early in the market (close to 0)
+        let early_tax_rate = Decimal::from_str(&tax_rate_early).unwrap();
+        assert!(early_tax_rate < Decimal::from_str("0.1").unwrap()); // Less than 10%
+
+        // Amount after tax should be close to the original amount
+        let early_amount_after_tax = Uint128::from_str(&amount_after_tax_early).unwrap();
+        assert!(early_amount_after_tax > Uint128::from(180u128)); // Should get back at least 180 out of 200
+
+        // Check user balance increased
+        let user_balance_after_early_sell = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user1.address().to_string(),
+                denom: BUY_TOKEN.to_string(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        println!(
+            "User balance after early sell: {}",
+            user_balance_after_early_sell
+        );
+
+        // User should have received some tokens back
+        let initial_balance =
+            Uint128::from_str("100000000000000000000000").unwrap() - Uint128::from(1000u128);
+        let expected_balance = initial_balance + early_amount_after_tax;
+        assert_eq!(
+            Uint128::from_str(&user_balance_after_early_sell).unwrap(),
+            expected_balance
+        );
+    }
+
+    #[test]
+    fn test_sell_after_resolved_market_fails() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // User1 buys shares
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, BUY_TOKEN)],
+            &user1,
+        )
+        .unwrap();
+
+        // Resolve the market
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::Resolve {
+                market_id: "test_market_1".to_string(),
+                winning_option: "Yes".to_string(),
+            },
+            &[],
+            &admin,
+        )
+        .unwrap();
+
+        // Get market info
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Try to sell after market is resolved (should fail)
+        let result = wasm.execute(
+            &market_address,
+            &ExecuteMsg::SellShare {
+                option: "Yes".to_string(),
+            },
+            &[coin(500, &market.token_a.denom)],
+            &user1,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot sell shares after market is resolved"));
+    }
+
+    #[test]
+    fn test_get_tax_rate_query() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // Query tax rate at market start (should be 0%)
+        let tax_rate: TaxRateResponse = wasm
+            .query(&market_address, &QueryMsg::GetTaxRate {})
+            .unwrap();
+
+        println!("Tax rate at market start: {}", tax_rate.tax_rate);
+
+        assert_eq!(tax_rate.tax_rate, Decimal::zero());
+
+        // Simulate time passage (advance by half the market duration)
+        let block_time = app.get_block_time_seconds() as u64;
+        let start_time = get_start_time();
+        let end_time = get_end_time();
+        let half_duration = (end_time.seconds() - start_time.seconds()) / 2;
+        app.increase_time(half_duration as u64);
+
+        // Query tax rate at middle of market (should be around 50%)
+        let tax_rate: TaxRateResponse = wasm
+            .query(&market_address, &QueryMsg::GetTaxRate {})
+            .unwrap();
+
+        println!("Tax rate at middle of market: {}", tax_rate.tax_rate);
+
+        // Should be approximately 50% tax rate
+        let expected_rate = Decimal::from_str("0.5").unwrap();
+        let tolerance = Decimal::from_str("0.1").unwrap(); // 10% tolerance
+
+        assert!(
+            tax_rate.tax_rate >= expected_rate - tolerance
+                && tax_rate.tax_rate <= expected_rate + tolerance
+        );
+
+        // Advance to near market end
+        let near_end_duration = end_time.seconds() - start_time.seconds() - 100; // 100 seconds before end
+        app.increase_time(near_end_duration as u64);
+
+        // Query tax rate near market end (should be very high)
+        let tax_rate: TaxRateResponse = wasm
+            .query(&market_address, &QueryMsg::GetTaxRate {})
+            .unwrap();
+
+        println!("Tax rate near market end: {}", tax_rate.tax_rate);
+
+        assert!(tax_rate.tax_rate > Decimal::from_str("0.9").unwrap()); // > 90%
+    }
+
+    #[test]
+    fn test_simulate_sell_query() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // Simulate sell at market start (should have 0% tax)
+        let simulate: SimulateSellResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::SimulateSell {
+                    option: "Yes".to_string(),
+                    amount: "1000".to_string(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(simulate.amount_sent, "1000");
+        assert_eq!(simulate.tax_rate, Decimal::zero());
+        assert_eq!(simulate.tax_amount, "0");
+        assert_eq!(simulate.amount_after_tax, "1000");
+
+        // Advance time to middle of market
+        let block_time = app.get_block_time_seconds() as u64;
+        let start_time = get_start_time();
+        let end_time = get_end_time();
+        let half_duration = (end_time.seconds() - start_time.seconds()) / 2;
+        app.increase_time(half_duration as u64);
+
+        // Simulate sell at middle of market (should have ~50% tax)
+        let simulate: SimulateSellResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::SimulateSell {
+                    option: "Yes".to_string(),
+                    amount: "1000".to_string(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(simulate.amount_sent, "1000");
+
+        // Tax rate should be around 50%
+        let expected_rate = Decimal::from_str("0.5").unwrap();
+        let tolerance = Decimal::from_str("0.1").unwrap();
+        assert!(
+            simulate.tax_rate >= expected_rate - tolerance
+                && simulate.tax_rate <= expected_rate + tolerance
+        );
+
+        // Tax amount should be around 500 (50% of 1000)
+        let tax_amount = Uint128::from_str(&simulate.tax_amount).unwrap();
+        assert!(tax_amount >= Uint128::from(400u128) && tax_amount <= Uint128::from(600u128));
+
+        // Amount after tax should be around 500
+        let amount_after_tax = Uint128::from_str(&simulate.amount_after_tax).unwrap();
+        assert!(
+            amount_after_tax >= Uint128::from(400u128)
+                && amount_after_tax <= Uint128::from(600u128)
+        );
+
+        // Verify calculation consistency
+        let calculated_tax = Uint128::from(1000u128) - amount_after_tax;
+        assert_eq!(tax_amount, calculated_tax);
     }
 }
