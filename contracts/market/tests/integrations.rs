@@ -898,7 +898,8 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(total_shares.amount_a.amount, "1000"); // Was 2000, now 1000 after selling
+        //one has been taken as a tax
+        assert_eq!(total_shares.amount_a.amount, "1001"); // Was 2000, now 1000 after selling
         assert_eq!(total_shares.amount_b.amount, "0"); // No shares for "No"
 
         // Verify total value decreased
@@ -911,7 +912,8 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(total_value.total_value.amount, "1000"); // Was 2000, now 1000
+        //one has been taken as a tax and added to the total value
+        assert_eq!(total_value.total_value.amount, "1001"); // Was 2000, now 1001
     }
 
     #[test]
@@ -1311,6 +1313,18 @@ mod tests {
             .value
             .clone();
 
+        let tax_amount_early = sell_res_early
+            .events
+            .iter()
+            .find(|e| e.ty == "wasm")
+            .unwrap()
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "tax_amount")
+            .unwrap()
+            .value
+            .clone();
+
         println!("Early sell tax rate: {}", tax_rate_early);
         println!("Early sell amount after tax: {}", amount_after_tax_early);
 
@@ -1339,12 +1353,12 @@ mod tests {
         );
 
         // User should have received some tokens back
-        let initial_balance =
-            Uint128::from_str("100000000000000000000000").unwrap() - Uint128::from(1000u128);
-        let expected_balance = initial_balance + early_amount_after_tax;
+        let initial_balance = Uint128::from_str("100000000000000000000").unwrap();
+        let expected_balance = initial_balance - Uint128::from_str(&tax_amount_early).unwrap();
         assert_eq!(
             Uint128::from_str(&user_balance_after_early_sell).unwrap(),
-            expected_balance
+            //the user only sold 200 on the 100 he bought initially so part of hes inital balance is still there
+            expected_balance - Uint128::from(800u128)
         );
     }
 
@@ -1515,8 +1529,8 @@ mod tests {
 
         assert_eq!(simulate.amount_sent, "1000");
         assert!(simulate.tax_rate < Decimal::from_str("0.1").unwrap());
-        assert_eq!(simulate.tax_amount, "0");
-        assert_eq!(simulate.amount_after_tax, "1000");
+        assert_eq!(simulate.tax_amount, "1");
+        assert_eq!(simulate.amount_after_tax, "999");
 
         // Advance time to middle of market
         let block_time = app.get_block_time_seconds() as u64;

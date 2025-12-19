@@ -230,12 +230,15 @@ impl MarketState {
         current_time: Timestamp,
     ) -> Uint128 {
         let tax_rate = self.calculate_time_based_tax(config, current_time);
-        let tax_amount = Decimal::from_str(&sell_amount.to_string()).unwrap_or_default() * tax_rate;
 
-        let amount_after_tax =
-            Decimal::from_str(&sell_amount.to_string()).unwrap_or_default() - tax_amount;
+        // Calculate the retention ratio (1 - tax_rate)
+        let amount_after_tax_ratio = Decimal::one() - tax_rate;
 
-        // Convert back to Uint128, ensuring it doesn't go negative
-        Uint128::from_str(&amount_after_tax.to_string()).unwrap_or_default()
+        // Convert to decimal, multiply, then convert back
+        let sell_amount_decimal = Decimal::from_atomics(sell_amount, 0).unwrap_or_default();
+        let amount_after_tax_decimal = sell_amount_decimal * amount_after_tax_ratio;
+
+        // Convert back to Uint128
+        amount_after_tax_decimal.to_uint_floor()
     }
 }
