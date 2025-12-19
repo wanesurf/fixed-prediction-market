@@ -67,6 +67,13 @@ pub enum QueryMsg {
     GetTotalSharesPerOption { market_id: String }, // Total shares per option
     #[returns(OddsResponse)] //TOD):rename!
     GetOdds { market_id: String }, // Total shares per option
+    #[returns(TaxRateResponse)]
+    GetTaxRate {}, // Current tax rate for selling
+    #[returns(SimulateSellResponse)]
+    SimulateSell {
+        option: String,
+        amount: String,
+    }, // Simulate selling shares
 }
 
 // We define a custom struct for each query response
@@ -140,4 +147,17 @@ pub struct UserPotentialWinningsResponse {
 #[cw_serde]
 pub struct UserWinningsResponse {
     pub winnings: Coin,
+}
+
+#[cw_serde]
+pub struct TaxRateResponse {
+    pub tax_rate: Decimal, // Current tax rate as a decimal (0.0 to 1.0)
+}
+
+#[cw_serde]
+pub struct SimulateSellResponse {
+    pub amount_sent: String,       // Amount user wants to sell
+    pub tax_rate: Decimal,         // Tax rate applied
+    pub tax_amount: String,        // Amount taken as tax
+    pub amount_after_tax: String,  // Amount user would receive
 }

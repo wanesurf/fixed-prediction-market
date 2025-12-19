@@ -184,6 +184,13 @@ pub fn sell_share(
     let config = CONFIG.load(deps.storage)?;
     let mut market_state = MARKET_STATE.load(deps.storage)?;
 
+    // Check if market is still active (can't sell after resolved)
+    if matches!(market_state.status, MarketStatus::Resolved(_)) {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Cannot sell shares after market is resolved",
+        )));
+    }
+
     // Find the matching market option
     let market_option = config
         .pairs
@@ -196,6 +203,12 @@ pub fn sell_share(
 
     // Amount the user wants to sell
     let amount_sent = must_pay(&info, &associated_token_denom)?;
+
+    // Calculate time-based tax
+    let tax_rate = market_state.calculate_time_based_tax(&config, env.block.time);
+    let amount_after_tax =
+        market_state.calculate_sell_amount_with_tax(&config, amount_sent, env.block.time);
+    let tax_amount = amount_sent - amount_after_tax;
 
     // Update share using Map - O(1) operation
     SHARES.update(
@@ -215,16 +228,17 @@ pub fn sell_share(
         },
     )?;
 
-    // Update aggregate totals
+    // Update aggregate totals - reduce by full amount sent (user's share position decreases)
     if market_option.text == config.pairs[0].text {
-        market_state.total_stake_option_a -= amount_sent;
+        market_state.total_stake_option_a -= amount_after_tax;
     } else {
-        market_state.total_stake_option_b -= amount_sent;
+        market_state.total_stake_option_b -= amount_after_tax;
     }
 
-    // Update total value
+    // Update total value - only reduce by the amount returned to user
+    // The tax amount stays in the pot, benefiting remaining participants
     let new_total_value =
-        Uint128::from_str(&market_state.total_value.amount).unwrap() - amount_sent;
+        Uint128::from_str(&market_state.total_value.amount).unwrap() - amount_after_tax;
     market_state.total_value.amount = new_total_value.to_string();
 
     // Save the updated market state
@@ -239,11 +253,30 @@ pub fn sell_share(
         }),
     };
 
+    // Send back only the amount after tax to the user
+    // The tax amount effectively stays in the market pot, benefiting remaining participants
+    let mut messages = vec![CosmosMsg::Any(burn_msg.to_any())];
+
+    if amount_after_tax > Uint128::zero() {
+        let return_msg = MsgSend {
+            from_address: env.contract.address.to_string(),
+            to_address: info.sender.to_string(),
+            amount: vec![Coin {
+                denom: config.buy_token.clone(),
+                amount: amount_after_tax.to_string(),
+            }],
+        };
+        messages.push(CosmosMsg::Any(return_msg.to_any()));
+    }
+
     Ok(Response::new()
         .add_attribute("action", "sell_share")
         .add_attribute("option", market_option.text)
-        .add_attribute("amount", amount_sent.to_string())
-        .add_message(CosmosMsg::Any(burn_msg.to_any())))
+        .add_attribute("tokens_sent", amount_sent.to_string())
+        .add_attribute("amount_after_tax", amount_after_tax.to_string())
+        .add_attribute("tax_amount", tax_amount.to_string())
+        .add_attribute("tax_rate", tax_rate.to_string())
+        .add_messages(messages))
 }
 
 pub fn buy_share(
@@ -478,6 +511,10 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             to_json_binary(&query::query_total_shares_per_option(deps, market_id)?)
         }
         QueryMsg::GetOdds { market_id: _ } => to_json_binary(&query::query_odds(deps)?),
+        QueryMsg::GetTaxRate {} => to_json_binary(&query::query_tax_rate(deps, _env)?),
+        QueryMsg::SimulateSell { option, amount } => {
+            to_json_binary(&query::query_simulate_sell(deps, _env, option, amount)?)
+        }
     }
 }
 pub mod query {
@@ -488,8 +525,8 @@ pub mod query {
 
     use crate::msg::{
         AllSharesResponse, MarketResponse, MarketStatsResponse, OddsResponse, ShareResponse,
-        TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse,
-        UserWinningsResponse,
+        SimulateSellResponse, TaxRateResponse, TotalSharesPerOptionResponse, TotalValueResponse,
+        UserPotentialWinningsResponse, UserWinningsResponse,
     };
 
     use super::*;
@@ -671,6 +708,49 @@ pub mod query {
     ) -> StdResult<QueryBalanceResponse> {
         let request = QueryBalanceRequest { account, denom };
         request.query(&deps.querier)
+    }
+
+    pub fn query_tax_rate(deps: Deps, env: Env) -> StdResult<TaxRateResponse> {
+        let config = CONFIG.load(deps.storage)?;
+        let market_state = MARKET_STATE.load(deps.storage)?;
+
+        let tax_rate = market_state.calculate_time_based_tax(&config, env.block.time);
+
+        Ok(TaxRateResponse { tax_rate })
+    }
+
+    pub fn query_simulate_sell(
+        deps: Deps,
+        env: Env,
+        option: String,
+        amount: String,
+    ) -> StdResult<SimulateSellResponse> {
+        let config = CONFIG.load(deps.storage)?;
+        let market_state = MARKET_STATE.load(deps.storage)?;
+
+        // Validate option exists
+        let _market_option = config
+            .pairs
+            .iter()
+            .find(|p| p.text == option)
+            .ok_or_else(|| StdError::generic_err("Invalid option"))?;
+
+        // Parse amount
+        let amount_sent = Uint128::from_str(&amount)
+            .map_err(|_| StdError::generic_err("Invalid amount format"))?;
+
+        // Calculate tax
+        let tax_rate = market_state.calculate_time_based_tax(&config, env.block.time);
+        let amount_after_tax =
+            market_state.calculate_sell_amount_with_tax(&config, amount_sent, env.block.time);
+        let tax_amount = amount_sent - amount_after_tax;
+
+        Ok(SimulateSellResponse {
+            amount_sent: amount_sent.to_string(),
+            tax_rate,
+            tax_amount: tax_amount.to_string(),
+            amount_after_tax: amount_after_tax.to_string(),
+        })
     }
 }
 

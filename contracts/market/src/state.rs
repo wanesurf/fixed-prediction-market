@@ -184,4 +184,58 @@ impl MarketState {
             }),
         }
     }
+
+    /// Calculate time-based tax percentage for selling shares
+    /// Formula: market_length_in_sec - (market_length_in_sec - 1 * elapsed_time)
+    /// Returns a tax percentage between 0.0 and 1.0
+    /// The closer to market end, the higher the tax
+    pub fn calculate_time_based_tax(&self, config: &Config, current_time: Timestamp) -> Decimal {
+        // Calculate total market duration in seconds
+        let market_length_sec = config.end_time.seconds() - config.start_time.seconds();
+
+        // If market length is 0 or invalid, return 0 tax
+        if market_length_sec == 0 {
+            return Decimal::zero();
+        }
+
+        // Calculate elapsed time from start
+        let elapsed_sec = if current_time.seconds() > config.start_time.seconds() {
+            current_time.seconds() - config.start_time.seconds()
+        } else {
+            0 // Market hasn't started yet
+        };
+
+        // If current time is beyond market end, use full market length
+        let elapsed_sec = elapsed_sec.min(market_length_sec);
+
+        // Calculate tax using the formula: market_length - (market_length - elapsed)
+        // This simplifies to: elapsed_sec / market_length_sec
+        // But following your specific formula structure:
+        let tax_factor = market_length_sec - (market_length_sec - elapsed_sec);
+
+        // Convert to percentage (0.0 to 1.0)
+        // At market start: tax_factor = 0, so tax = 0%
+        // At market end: tax_factor = market_length_sec, so tax = 100%
+        let tax_percentage = Decimal::from_ratio(tax_factor, market_length_sec);
+
+        // Cap at maximum 100% tax
+        tax_percentage.min(Decimal::one())
+    }
+
+    /// Calculate the sell amount after applying time-based tax
+    pub fn calculate_sell_amount_with_tax(
+        &self,
+        config: &Config,
+        sell_amount: Uint128,
+        current_time: Timestamp,
+    ) -> Uint128 {
+        let tax_rate = self.calculate_time_based_tax(config, current_time);
+        let tax_amount = Decimal::from_str(&sell_amount.to_string()).unwrap_or_default() * tax_rate;
+
+        let amount_after_tax =
+            Decimal::from_str(&sell_amount.to_string()).unwrap_or_default() - tax_amount;
+
+        // Convert back to Uint128, ensuring it doesn't go negative
+        Uint128::from_str(&amount_after_tax.to_string()).unwrap_or_default()
+    }
 }
