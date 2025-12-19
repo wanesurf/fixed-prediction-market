@@ -1,12 +1,12 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response};
+use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 use cw2::set_contract_version;
-// use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::execute;
-use crate::msg::{ExecuteMsg, InstantiateMsg};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::query;
 use crate::state::{Config, CONFIG};
 
 // version info for migration info
@@ -69,5 +69,14 @@ pub fn execute(
             resolution_source,
             oracle,
         ),
+    }
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::GetConfig {} => to_json_binary(&query::query_config(deps)?),
+        QueryMsg::Market { market_id } => to_json_binary(&query::query_market(deps, market_id)?),
+        QueryMsg::ListMarkets {} => to_json_binary(&query::query_list_markets(deps)?),
     }
 }

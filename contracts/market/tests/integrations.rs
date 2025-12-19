@@ -2,6 +2,7 @@
 mod tests {
     use std::str::FromStr;
 
+    use chrono::Utc;
     use coreum_test_tube::{Account, Bank, CoreumTestApp, Module, Runner, SigningAccount, Wasm};
     use coreum_wasm_sdk::types::cosmos::bank::v1beta1::QueryBalanceRequest;
     use coreum_wasm_sdk::types::cosmwasm::wasm::v1::{
@@ -10,15 +11,16 @@ mod tests {
 
     use cosmwasm_std::{coin, Addr, Decimal, Timestamp, Uint128};
     use market::msg::{
-        ExecuteMsg, QueryMsg, MarketResponse, AllSharesResponse, MarketStatsResponse,
-        UserWinningsResponse, UserPotentialWinningsResponse, TotalValueResponse,
-        TotalSharesPerOptionResponse, OddsResponse,
+        AllSharesResponse, ExecuteMsg, MarketResponse, MarketStatsResponse, OddsResponse, QueryMsg,
+        TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse,
+        UserWinningsResponse,
     };
-    use market::state::{MarketStatus, MarketOption};
+    use market::state::{MarketOption, MarketStatus};
     use registry::msg::{
         ExecuteMsg as RegistryExecuteMsg, InstantiateMsg as RegistryInstantiateMsg,
-        QueryMsg as RegistryQueryMsg, MarketInfo,
+        QueryMsg as RegistryQueryMsg,
     };
+    use registry::state::MarketInfo;
 
     const FEE_DENOM: &str = "ucore";
     const BUY_TOKEN: &str = "uusdc";
@@ -61,6 +63,10 @@ mod tests {
             .data
             .address;
 
+        let now = Timestamp::from_seconds(Utc::now().timestamp() as u64);
+        let end_time = now.plus_seconds(3600 * 24 * 1); // 1 days from now
+                                                        // let start_time = now.minus_seconds(3600 * 24 * 30); // 30 days ago
+
         // Create market through registry
         let create_market_res = wasm
             .execute(
@@ -68,8 +74,8 @@ mod tests {
                 &RegistryExecuteMsg::CreateMarket {
                     id: "test_market_1".to_string(),
                     options: vec!["Yes".to_string(), "No".to_string()],
-                    start_time: Timestamp::from_seconds(1640995200), // 2022-01-01
-                    end_time: Timestamp::from_seconds(1672531200),   // 2023-01-01
+                    start_time: now,
+                    end_time: end_time,
                     buy_token: BUY_TOKEN.to_string(),
                     banner_url: "https://example.com/banner.png".to_string(),
                     description: "Test prediction market for integration testing".to_string(),
@@ -101,6 +107,23 @@ mod tests {
             })
             .unwrap();
 
+        let market_info: MarketInfo = wasm
+            .query(
+                &registry_address,
+                &RegistryQueryMsg::Market {
+                    market_id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        let market_address_from_registry = market_info.contract_address;
+
+        println!(
+            "Market address from registry: {}",
+            market_address_from_registry
+        );
+        println!("Market address from events: {}", market_address);
+
         (registry_address, market_address)
     }
 
@@ -115,7 +138,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         println!("Registry address: {}", registry_address);
         println!("Market address: {}", market_address);
@@ -131,12 +155,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(market_info.id, "test_market_1");
+        //verify we have the right market contract address in the registry
         assert_eq!(market_info.contract_address.to_string(), market_address);
         assert_eq!(market_info.pairs.len(), 2);
         assert_eq!(market_info.pairs[0].text, "Yes");
         assert_eq!(market_info.pairs[1].text, "No");
 
-        // Query the market contract directly to verify it was instantiated correctly
         let market: MarketResponse = wasm
             .query(
                 &market_address,
@@ -173,7 +197,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // User1 buys shares for "Yes"
         let buy_res = wasm
@@ -235,7 +260,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -315,7 +341,8 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
         let bank = Bank::new(&app);
 
-        let (registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // Users buy shares
         wasm.execute(
@@ -410,7 +437,10 @@ mod tests {
             &ExecuteMsg::Withdraw {
                 market_id: "test_market_1".to_string(),
             },
-            &[coin(Uint128::from_str(&user1_balance_before).unwrap().u128(), &market.token_a.denom)],
+            &[coin(
+                Uint128::from_str(&user1_balance_before).unwrap().u128(),
+                &market.token_a.denom,
+            )],
             &user1,
         )
         .unwrap();
@@ -427,7 +457,10 @@ mod tests {
             .amount;
 
         println!("User1 balance after withdrawal: {}", user1_balance_after);
-        assert!(Uint128::from_str(&user1_balance_after).unwrap() > Uint128::from_str("99999999999999999999000").unwrap());
+        assert!(
+            Uint128::from_str(&user1_balance_after).unwrap()
+                > Uint128::from_str("99999999999999999999000").unwrap()
+        );
     }
 
     #[test]
@@ -456,7 +489,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -497,7 +531,10 @@ mod tests {
         // With 3000 on "Yes" and 1000 on "No":
         // odds_a (Yes) = 1000/3000 = 0.333...
         // odds_b (No) = 3000/1000 = 3.0
-        assert_eq!(odds.odds_a, Decimal::from_str("0.333333333333333333").unwrap());
+        assert_eq!(
+            odds.odds_a,
+            Decimal::from_str("0.333333333333333333").unwrap()
+        );
         assert_eq!(odds.odds_b, Decimal::from_str("3").unwrap());
     }
 
@@ -521,7 +558,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // Try to resolve market as non-admin user (should fail)
         let result = wasm.execute(
@@ -565,7 +603,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -602,8 +641,14 @@ mod tests {
             )
             .unwrap();
 
-        println!("User1 potential winnings A: {}", potential_winnings.potential_win_a.amount);
-        println!("User1 potential winnings B: {}", potential_winnings.potential_win_b.amount);
+        println!(
+            "User1 potential winnings A: {}",
+            potential_winnings.potential_win_a.amount
+        );
+        println!(
+            "User1 potential winnings B: {}",
+            potential_winnings.potential_win_b.amount
+        );
 
         // User1 has 2000 on "Yes", and there's 1000 on "No"
         // After commission (5%), user stake becomes 2000 * 0.95 = 1900
@@ -636,7 +681,8 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) = setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // Resolve the market first
         wasm.execute(

@@ -12,7 +12,7 @@ use utils::{address::derive_address2, hashing::hash_data, validation::validate_f
 
 pub fn execute_create_market(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     id: String,
     options: Vec<String>,
@@ -82,11 +82,11 @@ pub fn execute_create_market(
         oracle: oracle.clone(),
     };
 
-    let registry_canonical_addr = deps.api.addr_canonicalize(&info.sender.to_string())?;
+    let registry_canonical_addr = deps.api.addr_canonicalize(env.contract.address.as_str())?;
     // derive the market address from the code id
     let market_code_info = deps.querier.query_wasm_code_info(config.market_code_id)?;
     let market_hash = hash_data(vec![&id]);
-    let market_canonical_addr = derive_address2(
+    let market_canonical_addr: cosmwasm_std::CanonicalAddr = derive_address2(
         registry_canonical_addr.clone(),
         market_hash.as_slice(),
         &market_code_info.checksum.to_hex(),

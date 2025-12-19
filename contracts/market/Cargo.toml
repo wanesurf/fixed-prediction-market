@@ -35,5 +35,7 @@ utils = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+chrono = "0.4"
 cw-multi-test = "2.0.0"
 coreum-test-tube = { workspace = true }
+registry = { workspace = true, features = ["library"] }

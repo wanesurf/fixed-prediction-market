@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/contracts/registry", "src/contracts/market"]
+members = ["contracts/registry", "contracts/market"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -7,7 +7,7 @@ cosmwasm-schema = "2.2.0"
 cosmwasm-std = { version = "2.2.0", features = ["cosmwasm_2_0"] }
 cw-storage-plus = "2.0.0"
 cw2 = "2.0.0"
-schemars = "0.8.16"
+schemars = "1.1.0"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }
 coreum-wasm-sdk = "1.2.1"
@@ -21,11 +21,10 @@ tokio = { version = "1.0", default-features = false, features = [
 coreum-test-tube = "5.0.0"
 cw-ownable = { version = "2.1.0" }
 cw-utils = { version = "2.0.0" }
-market = { path = "src/contracts/market" }
-registry = { path = "src/contracts/registry" }
-utils = { path = "src/packages/utils" }
+market = { path = "contracts/market" }
+registry = { path = "contracts/registry" }
+utils = { path = "packages/utils" }
 sha2 = { version = "0.10.9" }
-
 
 [profile.release]
 opt-level = 3
@@ -42,5 +41,5 @@ overflow-checks = true
 optimize = """docker run --rm -v "$(pwd)":/code \
   --mount type=volume,source="$(basename "$(pwd)")_cache",target=/target \
   --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-  cosmwasm/optimizer:0.16.0
+ cosmwasm/optimizer:0.17.0
 """
