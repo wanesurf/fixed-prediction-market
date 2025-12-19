@@ -153,7 +153,7 @@ pub mod execute {
         );
 
         // Issue two new smart tokens for the market options
-        let token_a = MsgIssue {
+        let issue_token_a = MsgIssue {
             issuer: env.contract.address.to_string(),
             symbol: symbol_token_a.clone(),
             subunit: subunit_token_a.clone(),
@@ -164,10 +164,10 @@ pub mod execute {
             features: vec![0 as i32, 1 as i32],
             burn_rate: "0".to_string(),
             send_commission_rate: "0".to_string(),
-            uri: "https://truthmarkets.com".to_string(),
+            uri: "https://app.cruise-control.xyz/dashboard".to_string(),
             uri_hash: "".to_string(),
-            // extension_settings: None,
-            // dex_settings: None,
+            extension_settings: None,
+            dex_settings: None,
         };
 
         let denom_token_a = format!("{}-{}", subunit_token_a, env.contract.address);
@@ -184,7 +184,7 @@ pub mod execute {
             id.replace(" ", "")
         );
 
-        let token_b = MsgIssue {
+        let issue_token_b = MsgIssue {
             issuer: env.contract.address.to_string(),
             symbol: symbol_token_b.clone(),
             subunit: subunit_token_b.clone(),
@@ -194,10 +194,10 @@ pub mod execute {
             features: vec![0 as i32, 1 as i32],
             burn_rate: "0".to_string(),
             send_commission_rate: "0".to_string(),
-            uri: "https://truthmarkets.com".to_string(),
+            uri: "https://app.cruise-control.xyz".to_string(),
             uri_hash: "".to_string(),
-            // extension_settings: None,
-            // dex_settings: None,
+            extension_settings: None,
+            dex_settings: None,
         };
 
         let denom_token_b = format!("{}-{}", subunit_token_b, env.contract.address);
@@ -251,8 +251,8 @@ pub mod execute {
         Ok(Response::new()
             .add_attribute("action", "create_market")
             .add_attribute("market_id", id)
-            .add_message(token_a)
-            .add_message(token_b))
+            .add_message(CosmosMsg::Any(issue_token_a.to_any()))
+            .add_message(CosmosMsg::Any(issue_token_b.to_any())))
     }
 
     pub fn buy_share(
@@ -391,7 +391,7 @@ pub mod execute {
 
         Ok(Response::new()
             .add_attribute("action", "buy_share")
-            .add_message(mint_msg))
+            .add_message(CosmosMsg::Any(mint_msg.to_any())))
     }
 
     pub fn resolve(
@@ -504,7 +504,7 @@ pub mod execute {
         };
 
         Ok(Response::new()
-            .add_message(transfer_msg)
+            .add_message(CosmosMsg::Any(transfer_msg.to_any()))
             .add_attribute("action", "withdraw")
             .add_attribute("market_id", market_id)
             .add_attribute("user", info.sender)

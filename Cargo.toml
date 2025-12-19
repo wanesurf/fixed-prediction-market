@@ -4,13 +4,13 @@ resolver = "2"
 
 [workspace.dependencies]
 cosmwasm-schema = "2.2.0"
-cosmwasm-std = { version = "2.2.0", features = ["cosmwasm_1_4"] }
+cosmwasm-std = { version = "2.2.0", features = ["cosmwasm_2_0"] }
 cw-storage-plus = "2.0.0"
 cw2 = "2.0.0"
 schemars = "0.8.16"
 serde = { version = "1.0.197", default-features = false, features = ["derive"] }
 thiserror = { version = "1.0.58" }
-coreum-wasm-sdk = "0.2.4"
+coreum-wasm-sdk = "1.2.1"
 tokio = { version = "1.0", default-features = false, features = [
   "sync",
   "macros",
