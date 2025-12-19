@@ -29,6 +29,7 @@ schemars = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 coreum-wasm-sdk = { workspace = true }
+cw-ownable = { workspace = true }
 
 [dev-dependencies]
 cw-multi-test = "2.0.0"
