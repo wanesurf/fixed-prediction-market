@@ -1,7 +1,7 @@
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Timestamp, Uint128};
-use cw_storage_plus::Item;
+use cosmwasm_std::{Addr, Decimal, StdResult, Storage, Timestamp, Uint128};
+use cw_storage_plus::{Item, Map};
 use std::str::FromStr;
 
 #[cw_serde]
@@ -50,22 +50,23 @@ pub struct Config {
 
 #[cw_serde]
 pub struct MarketState {
-    pub shares: Vec<Share>,
     pub status: MarketStatus, // Combined status and outcome
     pub total_value: Coin,
-    pub num_bettors: u64, // Number of unique bettors
-                          //TODO: add odds directly so we dont have to calculate them on the fly
+    pub num_bettors: u64,              // Number of unique bettors
+    pub total_stake_option_a: Uint128, // Pre-calculated total for option A
+    pub total_stake_option_b: Uint128, // Pre-calculated total for option B
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const MARKET_STATE: Item<MarketState> = Item::new("market_state");
 
-#[cw_serde] //A user can only have 2 shares.We increment or decrement on the same share when a user buys or withdraws instead of creating a new share
-            // We use the option to reference which market option this share is for
+// Map with composite key: (user_address, option_text) -> Share
+// This allows O(1) lookups and efficient queries
+pub const SHARES: Map<(&Addr, &str), Share> = Map::new("shares");
+
+#[cw_serde]
 pub struct Share {
-    pub user: Addr,
-    pub option: MarketOption, // References which option from Config.pairs
-    pub amount: Uint128,      // Amount of tokens held for this option
+    pub amount: Uint128, // Amount of tokens held for this option
     pub has_withdrawn: bool,
 }
 
@@ -83,39 +84,14 @@ pub struct UserWinningsResponse {
 }
 
 impl MarketState {
-    /// Calculate the total stakes for each option
-    pub fn total_stakes(&self, config: &Config) -> (Uint128, Uint128) {
-        let total_a: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.option.text == config.pairs[0].text)
-            .map(|s| s.amount)
-            .sum();
-
-        let total_b: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.option.text == config.pairs[1].text)
-            .map(|s| s.amount)
-            .sum();
-
-        (total_a, total_b)
+    /// Calculate the total stakes for each option (now uses pre-calculated values)
+    pub fn total_stakes(&self, _config: &Config) -> (Uint128, Uint128) {
+        (self.total_stake_option_a, self.total_stake_option_b)
     }
 
-    pub fn calculate_odds(&self, config: &Config) -> (Decimal, Decimal) {
-        let total_a: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.option.text == config.pairs[0].text)
-            .map(|s| s.amount)
-            .sum();
-
-        let total_b: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.option.text == config.pairs[1].text)
-            .map(|s| s.amount)
-            .sum();
+    pub fn calculate_odds(&self, _config: &Config) -> (Decimal, Decimal) {
+        let total_a = self.total_stake_option_a;
+        let total_b = self.total_stake_option_b;
 
         let odds_a = if total_a.is_zero() {
             Decimal::zero()
@@ -127,38 +103,37 @@ impl MarketState {
             Decimal::zero()
         } else {
             Decimal::from_ratio(total_a, total_b)
-            // .checked_mul(Decimal::one() - COMMISSION_RATE)
-            // .unwrap_or_default()
         };
 
         (odds_a, odds_b)
     }
 
-    pub fn calculate_potential_winnings(&self, user: &Addr, config: &Config) -> (Coin, Coin) {
+    pub fn calculate_potential_winnings(
+        &self,
+        storage: &dyn Storage,
+        user: &Addr,
+        config: &Config,
+    ) -> StdResult<(Coin, Coin)> {
         let (odds_a, odds_b) = self.calculate_odds(config);
 
-        let user_stake_a: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.user == *user && s.option.text == config.pairs[0].text)
+        // Load user stakes from Map - O(1) lookups
+        let user_stake_a = SHARES
+            .may_load(storage, (user, &config.pairs[0].text))?
             .map(|s| s.amount)
-            .sum();
+            .unwrap_or_default();
+
+        let user_stake_b = SHARES
+            .may_load(storage, (user, &config.pairs[1].text))?
+            .map(|s| s.amount)
+            .unwrap_or_default();
 
         let user_stake_a_after_commission = Decimal::from_str(&user_stake_a.to_string())
             .unwrap_or_default()
             * (Decimal::one() - config.commission_rate);
 
-        let user_stake_b: Uint128 = self
-            .shares
-            .iter()
-            .filter(|s| s.user == *user && s.option.text == config.pairs[1].text)
-            .map(|s| s.amount)
-            .sum();
-
         let user_stake_b_after_commission = Decimal::from_str(&user_stake_b.to_string())
             .unwrap_or_default()
-            * Decimal::from_str(&(Decimal::one() - config.commission_rate).to_string())
-                .unwrap_or_default();
+            * (Decimal::one() - config.commission_rate);
 
         let winnings_a = Decimal::from_str(&user_stake_a_after_commission.to_string())
             .unwrap_or_default()
@@ -168,7 +143,6 @@ impl MarketState {
             .unwrap_or_default()
             * Decimal::from_str(&odds_b.to_string()).unwrap_or_default();
 
-        //the payout should be in the same token as the buy_token
         let winnings_a = Coin {
             denom: config.buy_token.clone(),
             amount: (winnings_a + user_stake_a_after_commission).to_string(),
@@ -179,33 +153,35 @@ impl MarketState {
             amount: (winnings_b + user_stake_b_after_commission).to_string(),
         };
 
-        (winnings_a, winnings_b)
+        Ok((winnings_a, winnings_b))
     }
-    /// Calculate the actual winnings for a user based on the market outcome
-    pub fn calculate_winnings(&self, user: &Addr, config: &Config) -> Coin {
-        let (winnings_a, winnings_b) = self.calculate_potential_winnings(user, config);
 
-        //We always compare [0] with token_a and [1] with token_b so it should be ok?
+    /// Calculate the actual winnings for a user based on the market outcome
+    pub fn calculate_winnings(
+        &self,
+        storage: &dyn Storage,
+        user: &Addr,
+        config: &Config,
+    ) -> StdResult<Coin> {
+        let (winnings_a, winnings_b) = self.calculate_potential_winnings(storage, user, config)?;
 
         match &self.status {
             MarketStatus::Resolved(winning_option) => {
                 if winning_option.text == config.pairs[0].text {
-                    winnings_a
+                    Ok(winnings_a)
                 } else if winning_option.text == config.pairs[1].text {
-                    winnings_b
+                    Ok(winnings_b)
                 } else {
-                    // This shouldn't happen if the market is properly maintained
-                    Coin {
+                    Ok(Coin {
                         denom: config.buy_token.clone(),
                         amount: "0".to_string(),
-                    }
+                    })
                 }
             }
-            // Market not resolved yet - no winnings
-            _ => Coin {
+            _ => Ok(Coin {
                 denom: self.total_value.denom.clone(),
                 amount: "0".to_string(),
-            },
+            }),
         }
     }
 }

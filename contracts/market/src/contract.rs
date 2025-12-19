@@ -13,12 +13,14 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{Config, MarketOption, MarketState, MarketStatus, Share, CONFIG, MARKET_STATE};
+use crate::state::{
+    Config, MarketOption, MarketState, MarketStatus, Share, CONFIG, MARKET_STATE, SHARES,
+};
 use cosmwasm_std::{CosmosMsg, Uint128};
 
 //Coreum related imports
-use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgIssue;
 use coreum_wasm_sdk::types::coreum::asset::ft::v1::MsgMint;
+use coreum_wasm_sdk::types::coreum::asset::ft::v1::{MsgBurn, MsgIssue};
 
 use coreum_wasm_sdk::types::cosmos::bank::v1beta1::MsgSend;
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
@@ -33,7 +35,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn instantiate(
     deps: DepsMut,
     env: Env,
-    info: MessageInfo,
+    _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     //NOTES: Each market will cost at least 20 COREUM to create (2 FT tokens creates)
@@ -120,13 +122,14 @@ pub fn instantiate(
     };
 
     let market_state = MarketState {
-        shares: vec![],
         status: MarketStatus::Pending,
         num_bettors: 0,
         total_value: Coin {
             denom: msg.buy_token.clone(),
             amount: "0".to_string(),
         },
+        total_stake_option_a: Uint128::zero(),
+        total_stake_option_b: Uint128::zero(),
     };
 
     let market_config = Config {
@@ -168,30 +171,80 @@ pub fn execute(
             winning_option,
         } => resolve(deps, env, info, market_id, winning_option),
         ExecuteMsg::Withdraw { market_id } => withdraw(deps, env, info, market_id),
+        ExecuteMsg::SellShare { option } => sell_share(deps, env, info, option),
     }
 }
 
-/// Sell a share from a market
-///
-/// # Arguments
-///
-/// * `deps` - The dependencies
-/// * `env` - The environment
-/// * `info` - The message info
-/// * `market_id` - The market ID
-// pub fn sell_share(
-//     deps: DepsMut,
-//     env: Env,
-//     info: MessageInfo,
-//     market_id: String,
-//     option: String,
-//     amount: Coin,
-// ) -> Result<Response, ContractError> {
-//    //TODO: Update total Value on sell. (replace by liquidity)
-///  We need to create the curve that will define how much the user forfeit to the pool he is leaving based on the amount of shares he is selling and how gar we are from the end of the market
-/// market_lenght_in_sec - ( market_lenght_in_sec - 1*x )
-///
-//}
+pub fn sell_share(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    option: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    let mut market_state = MARKET_STATE.load(deps.storage)?;
+
+    // Find the matching market option
+    let market_option = config
+        .pairs
+        .iter()
+        .find(|p| p.text == option)
+        .cloned()
+        .ok_or_else(|| StdError::generic_err("Invalid option"))?;
+
+    let associated_token_denom = market_option.associated_token_denom.clone();
+
+    // Amount the user wants to sell
+    let amount_sent = must_pay(&info, &associated_token_denom)?;
+
+    // Update share using Map - O(1) operation
+    SHARES.update(
+        deps.storage,
+        (&info.sender, &market_option.text),
+        |existing| -> StdResult<Share> {
+            match existing {
+                Some(mut share) => {
+                    if share.amount < amount_sent {
+                        return Err(StdError::generic_err("Insufficient shares to sell"));
+                    }
+                    share.amount -= amount_sent;
+                    Ok(share)
+                }
+                None => Err(StdError::generic_err("No shares found for user")),
+            }
+        },
+    )?;
+
+    // Update aggregate totals
+    if market_option.text == config.pairs[0].text {
+        market_state.total_stake_option_a -= amount_sent;
+    } else {
+        market_state.total_stake_option_b -= amount_sent;
+    }
+
+    // Update total value
+    let new_total_value =
+        Uint128::from_str(&market_state.total_value.amount).unwrap() - amount_sent;
+    market_state.total_value.amount = new_total_value.to_string();
+
+    // Save the updated market state
+    MARKET_STATE.save(deps.storage, &market_state)?;
+
+    // Burn the tokens
+    let burn_msg = MsgBurn {
+        sender: env.contract.address.to_string(),
+        coin: Some(Coin {
+            denom: market_option.associated_token_denom.clone(),
+            amount: amount_sent.to_string(),
+        }),
+    };
+
+    Ok(Response::new()
+        .add_attribute("action", "sell_share")
+        .add_attribute("option", market_option.text)
+        .add_attribute("amount", amount_sent.to_string())
+        .add_message(CosmosMsg::Any(burn_msg.to_any())))
+}
 
 pub fn buy_share(
     deps: DepsMut,
@@ -200,11 +253,8 @@ pub fn buy_share(
     _market_id: String,
     option: String,
 ) -> Result<Response, ContractError> {
-    //TODO: Update total Value on buy. (replace by liquidity)
-
     let config = CONFIG.load(deps.storage)?;
     let mut market_state = MARKET_STATE.load(deps.storage)?;
-    // Ensure the user sent the correct amount of tokens
 
     let payment: Uint128 = must_pay(&info, &config.buy_token)?;
 
@@ -215,7 +265,7 @@ pub fn buy_share(
         )));
     }
 
-    // Find the matching market pair
+    // Find the matching market option
     let market_option = config
         .pairs
         .iter()
@@ -223,65 +273,51 @@ pub fn buy_share(
         .cloned()
         .ok_or_else(|| StdError::generic_err("Invalid option"))?;
 
-    // Find existing shares for this user
-    let mut user_shares: Vec<_> = market_state
-        .shares
-        .iter_mut()
-        .filter(|s| s.user == info.sender)
-        .collect();
+    // Check if this is a new bettor (no existing shares for either option)
+    let has_any_shares = SHARES
+        .may_load(deps.storage, (&info.sender, &config.pairs[0].text))?
+        .is_some()
+        || SHARES
+            .may_load(deps.storage, (&info.sender, &config.pairs[1].text))?
+            .is_some();
 
-    match user_shares.len() {
-        0 => {
-            // User has no shares, create a new one
-            let share = Share {
-                user: info.sender.clone(),
-                option: market_option.clone(),
-                amount: payment,
-                has_withdrawn: false,
-            };
-            market_state.shares.push(share);
-            market_state.num_bettors += 1;
-        }
-        1 => {
-            // User has one share
-            let existing_share = &mut user_shares[0];
-            if existing_share.option.text == market_option.text {
-                // Same option - update amount
-                existing_share.amount += payment;
-            } else {
-                // User had one share for the other option, now buying a different option
-                let share = Share {
-                    user: info.sender.clone(),
-                    option: market_option.clone(),
-                    amount: payment,
-                    has_withdrawn: false,
-                };
-                market_state.shares.push(share);
-            }
-        }
-        2 => {
-            // User already has two shares
-            let matching_share = user_shares
-                .iter_mut()
-                .find(|s| s.option.text == market_option.text);
-
-            if let Some(share) = matching_share {
-                // Update existing share for the same option
-                share.amount += payment;
-            } else {
-                // TODO: this should never happen
-                return Err(ContractError::Std(StdError::generic_err(
-                    "User already has two shares with different options",
-                )));
-            }
-        }
-        _ => {
-            return Err(ContractError::Std(StdError::generic_err(
-                "Invalid state: User has more than 2 shares",
-            )));
-        }
+    if !has_any_shares {
+        market_state.num_bettors += 1;
     }
 
+    // Update or create share using Map - O(1) operation
+    SHARES.update(
+        deps.storage,
+        (&info.sender, &market_option.text),
+        |existing| -> StdResult<Share> {
+            match existing {
+                Some(mut share) => {
+                    share.amount += payment;
+                    Ok(share)
+                }
+                None => Ok(Share {
+                    amount: payment,
+                    has_withdrawn: false,
+                }),
+            }
+        },
+    )?;
+
+    // Update aggregate totals
+    if market_option.text == config.pairs[0].text {
+        market_state.total_stake_option_a += payment;
+    } else {
+        market_state.total_stake_option_b += payment;
+    }
+
+    // Update total value
+    let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + payment;
+    market_state.total_value.amount = new_total_value.to_string();
+
+    // Save the updated market state
+    MARKET_STATE.save(deps.storage, &market_state)?;
+
+    // Mint tokens to user
     let mint_msg = MsgMint {
         sender: env.contract.address.to_string(),
         coin: Some(Coin {
@@ -290,16 +326,11 @@ pub fn buy_share(
         }),
         recipient: info.sender.to_string(),
     };
-    // Update total Value on buy
-    let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + (&payment);
-
-    market_state.total_value.amount = new_total_value.to_string();
-
-    // Save the updated market state
-    MARKET_STATE.save(deps.storage, &market_state)?;
 
     Ok(Response::new()
         .add_attribute("action", "buy_share")
+        .add_attribute("option", market_option.text)
+        .add_attribute("amount", payment.to_string())
         .add_message(CosmosMsg::Any(mint_msg.to_any())))
 }
 
@@ -356,15 +387,8 @@ pub fn withdraw(
     info: MessageInfo,
     market_id: String,
 ) -> Result<Response, ContractError> {
-    //TODO: Update total Value on withdraw. (replace by liquidity)
-    // TODO: check that the right option token is being sent and burn it
-
-    // 1) The market stops accepting bets
-    // 2) The market is resolved
-    // 3) The user withdraws their winnings
-
     let config = CONFIG.load(deps.storage)?;
-    let mut market_state = MARKET_STATE.load(deps.storage)?;
+    let market_state = MARKET_STATE.load(deps.storage)?;
 
     // Get winning option (also checks if market is resolved)
     let winning_option = match &market_state.status {
@@ -376,36 +400,36 @@ pub fn withdraw(
         }
     };
 
-    //we're checking that the user sent the winning token denom to withdraw their winnings
-    let amount: Uint128 = must_pay(&info, &winning_option.associated_token_denom)?;
+    // Check that the user sent the winning token denom to withdraw their winnings
+    let _amount: Uint128 = must_pay(&info, &winning_option.associated_token_denom)?;
 
-    // Find user's shares first
-    let share_index = market_state
-        .shares
-        .iter()
-        .position(|s| s.user == info.sender && s.option.text == winning_option.text)
+    // Load and check user's winning share using Map - O(1) operation
+    let share = SHARES
+        .may_load(deps.storage, (&info.sender, &winning_option.text))?
         .ok_or_else(|| StdError::generic_err("No winning shares found for user"))?;
 
-    if market_state.shares[share_index].has_withdrawn {
+    if share.has_withdrawn {
         return Err(ContractError::Std(StdError::generic_err(
             "User has already withdrawn their winnings",
         )));
     }
 
     // Mark share as withdrawn
-    market_state.shares[share_index].has_withdrawn = true;
+    SHARES.update(
+        deps.storage,
+        (&info.sender, &winning_option.text),
+        |existing| -> StdResult<Share> {
+            match existing {
+                Some(mut s) => {
+                    s.has_withdrawn = true;
+                    Ok(s)
+                }
+                None => Err(StdError::generic_err("No shares found")),
+            }
+        },
+    )?;
 
-    let total_winnings = market_state.calculate_winnings(&info.sender, &config);
-
-    // Save updated market state
-    MARKET_STATE.save(deps.storage, &market_state)?;
-
-    // // total_winning_amount should be equal to the amount the user sent to withdraw --> this cannot work as the user will most likely have more winnings than the amount he sent to withdraw
-    // if total_winnings.amount != amount.to_string() {
-    //     return Err(ContractError::Std(StdError::generic_err(
-    //         "Total winnings do not match the amount sent to withdraw",
-    //     )));
-    // }
+    let total_winnings = market_state.calculate_winnings(deps.storage, &info.sender, &config)?;
 
     // Create bank transfer message
     let transfer_msg = MsgSend {
@@ -521,22 +545,25 @@ pub mod query {
     }
 
     pub fn query_all_shares(deps: Deps, _market_id: String) -> StdResult<AllSharesResponse> {
-        let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
 
-        let shares: Vec<ShareResponse> = market_state
-            .shares
-            .iter()
-            .map(|s| ShareResponse {
-                user: s.user.clone(),
-                option: s.option.text.clone(),
-                amount: Coin {
-                    denom: config.buy_token.clone(),
-                    amount: s.amount.to_string(),
-                },
-                has_withdrawn: s.has_withdrawn,
+        // Iterate over all shares in the Map
+        let shares: Vec<ShareResponse> = SHARES
+            .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+            .map(|item| {
+                let ((user, option_text), share) = item?;
+                Ok(ShareResponse {
+                    user,
+                    option: option_text,
+                    amount: Coin {
+                        denom: config.buy_token.clone(),
+                        amount: share.amount.to_string(),
+                    },
+                    has_withdrawn: share.has_withdrawn,
+                })
             })
-            .collect();
+            .collect::<StdResult<Vec<_>>>()?;
+
         Ok(AllSharesResponse { shares })
     }
 
@@ -573,23 +600,25 @@ pub mod query {
         _market_id: String,
         user: Addr,
     ) -> StdResult<AllSharesResponse> {
-        let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
 
-        let user_shares: Vec<ShareResponse> = market_state
-            .shares
-            .iter()
-            .filter(|s| s.user == user)
-            .map(|s| ShareResponse {
-                user: s.user.clone(),
-                option: s.option.text.clone(),
-                amount: Coin {
-                    denom: config.buy_token.clone(),
-                    amount: s.amount.to_string(),
-                },
-                has_withdrawn: s.has_withdrawn,
-            })
-            .collect();
+        // Query shares for both options for this user
+        let mut user_shares: Vec<ShareResponse> = Vec::new();
+
+        for option in &config.pairs {
+            if let Some(share) = SHARES.may_load(deps.storage, (&user, &option.text))? {
+                user_shares.push(ShareResponse {
+                    user: user.clone(),
+                    option: option.text.clone(),
+                    amount: Coin {
+                        denom: config.buy_token.clone(),
+                        amount: share.amount.to_string(),
+                    },
+                    has_withdrawn: share.has_withdrawn,
+                });
+            }
+        }
+
         Ok(AllSharesResponse {
             shares: user_shares,
         })
@@ -616,14 +645,15 @@ pub mod query {
         let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
 
-        // Handle the result of calculate_potential_winnings
-        let (winnings_a, winnings_b) = market_state.calculate_potential_winnings(&user, &config);
+        let (winnings_a, winnings_b) =
+            market_state.calculate_potential_winnings(deps.storage, &user, &config)?;
 
         Ok(UserPotentialWinningsResponse {
             potential_win_a: winnings_a,
             potential_win_b: winnings_b,
         })
     }
+
     pub fn query_user_winnings(
         deps: Deps,
         _market_id: String,
@@ -631,7 +661,7 @@ pub mod query {
     ) -> StdResult<UserWinningsResponse> {
         let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
-        let winnings = market_state.calculate_winnings(&user, &config);
+        let winnings = market_state.calculate_winnings(deps.storage, &user, &config)?;
         Ok(UserWinningsResponse { winnings })
     }
     pub fn query_balance(

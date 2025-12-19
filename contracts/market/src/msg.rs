@@ -35,6 +35,9 @@ pub enum ExecuteMsg {
     Withdraw {
         market_id: String,
     },
+    SellShare {
+        option: String,
+    },
 }
 
 #[cw_serde]
