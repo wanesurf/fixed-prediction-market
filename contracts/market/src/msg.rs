@@ -9,6 +9,7 @@ use crate::state::{MarketOption, MarketStatus};
 #[cw_serde]
 pub struct InstantiateMsg {
     pub id: String,
+    pub admin: Addr,
     pub options: Vec<String>, //outcomes options
     pub start_time: Timestamp,
     pub end_time: Timestamp,

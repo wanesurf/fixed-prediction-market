@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use std::ops::Mul;
     use std::str::FromStr;
 
     use chrono::Utc;
@@ -24,6 +25,7 @@ mod tests {
 
     const FEE_DENOM: &str = "ucore";
     const BUY_TOKEN: &str = "uusdc";
+    const COMMISSION_RATE: f64 = 0.05;
 
     fn setup_registry_and_market(
         wasm: &Wasm<'_, CoreumTestApp>,
@@ -51,7 +53,7 @@ mod tests {
                 registry_code_id,
                 &RegistryInstantiateMsg {
                     oracle: oracle.clone(),
-                    commission_rate: Decimal::from_str("0.05").unwrap(), // 5%
+                    commission_rate: Decimal::from_str(&COMMISSION_RATE.to_string()).unwrap(), // 5%
                     market_code_id,
                 },
                 Some(&admin.address()),
@@ -345,13 +347,13 @@ mod tests {
         let user1 = app
             .init_account(&[
                 coin(100_000_000_000_000_000_000u128, FEE_DENOM),
-                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+                coin(1000u128, BUY_TOKEN),
             ])
             .unwrap();
         let user2 = app
             .init_account(&[
                 coin(100_000_000_000_000_000_000u128, FEE_DENOM),
-                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+                coin(2000u128, BUY_TOKEN),
             ])
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
@@ -361,13 +363,15 @@ mod tests {
             setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
 
         // Users buy shares
+        let user1_betting_amount = 1000;
+        let user2_betting_amount = 2000;
         wasm.execute(
             &market_address,
             &ExecuteMsg::BuyShare {
                 market_id: "test_market_1".to_string(),
                 option: "Yes".to_string(),
             },
-            &[coin(1000, BUY_TOKEN)],
+            &[coin(user1_betting_amount, BUY_TOKEN)],
             &user1,
         )
         .unwrap();
@@ -378,7 +382,7 @@ mod tests {
                 market_id: "test_market_1".to_string(),
                 option: "No".to_string(),
             },
-            &[coin(2000, BUY_TOKEN)],
+            &[coin(user2_betting_amount, BUY_TOKEN)],
             &user2,
         )
         .unwrap();
@@ -404,6 +408,27 @@ mod tests {
             &admin, // Registry is the admin that can resolve markets
         )
         .unwrap();
+
+        // (potential winnings because we are not considering the commission)
+        let potential_winnings: UserPotentialWinningsResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetUserPotentialWinnings {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user1.address()),
+                },
+            )
+            .unwrap();
+
+        println!(
+            "User1 potential winnings: {}",
+            potential_winnings.potential_win_a.amount
+        );
+        // we take the fees on the total whitdraw! here: (1000+2000) * (1-COMMISSION_RATE) = 2850 uusdc
+        assert_eq!(
+            Uint128::from_str(&potential_winnings.potential_win_a.amount).unwrap(),
+            Uint128::from_str(&"2850".to_string()).unwrap()
+        );
 
         // Check market status after resolution
         let market_after: MarketResponse = wasm
@@ -447,16 +472,26 @@ mod tests {
             .unwrap()
             .amount;
 
+        //User 2 try to withdraw their winnings (even though he lost)
+        // let result = wasm.execute(
+        //     &market_address,
+        //     &ExecuteMsg::Withdraw {
+        //         market_id: "test_market_1".to_string(),
+        //     },
+        //     &[coin(
+        //         Uint128::from_str(&user2_balance_before).unwrap().u128(),
+        //         &market.token_b.denom,
+        //     )],
+        //     &user2,
+        // );
+
         // User1 withdraws their winnings by sending the winning token
         wasm.execute(
             &market_address,
             &ExecuteMsg::Withdraw {
                 market_id: "test_market_1".to_string(),
             },
-            &[coin(
-                Uint128::from_str(&user1_balance_before).unwrap().u128(),
-                &market.token_a.denom,
-            )],
+            &[coin(user1_betting_amount, &market.token_a.denom)],
             &user1,
         )
         .unwrap();
@@ -472,10 +507,12 @@ mod tests {
             .unwrap()
             .amount;
 
+        //should be, he's bet+the losing side - commission
         println!("User1 balance after withdrawal: {}", user1_balance_after);
-        assert!(
-            Uint128::from_str(&user1_balance_after).unwrap()
-                > Uint128::from_str("99999999999999999999000").unwrap()
+        let expected_balance = ((1000.0 + 2000.0) * (1.0 - COMMISSION_RATE)) as u128;
+        assert_eq!(
+            Uint128::from_str(&user1_balance_after).unwrap(),
+            Uint128::from_str(&expected_balance.to_string()).unwrap()
         );
     }
 

@@ -70,6 +70,7 @@ pub fn execute_create_market(
 
     let market_instantiate_msg = MarketInstantiateMsg {
         id: id.clone(),
+        admin: config.admin.clone(),
         options: options.clone(),
         end_time: end_time.clone(),
         buy_token: buy_token.clone(),

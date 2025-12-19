@@ -131,7 +131,7 @@ pub fn instantiate(
 
     let market_config = Config {
         id: msg.id.clone(),
-        registry_address: info.sender.clone(),
+        admin: msg.admin.clone(),
         commission_rate: msg.commission_rate.clone(),
         pairs: vec![option_a, option_b],
         start_time: msg.start_time.clone(),
@@ -314,7 +314,7 @@ pub fn resolve(
     let mut market_state = MARKET_STATE.load(deps.storage)?;
 
     // Ensure only the admin can resolve the market --> The relayer
-    if info.sender != config.registry_address {
+    if info.sender != config.admin {
         return Err(ContractError::Std(StdError::generic_err(
             "Unauthorized: Only the admin can resolve markets",
         )));
@@ -400,12 +400,12 @@ pub fn withdraw(
     // Save updated market state
     MARKET_STATE.save(deps.storage, &market_state)?;
 
-    // total_winning_amount should be equal to the amount the user sent to withdraw
-    if total_winnings.amount != amount.to_string() {
-        return Err(ContractError::Std(StdError::generic_err(
-            "Total winnings do not match the amount sent to withdraw",
-        )));
-    }
+    // // total_winning_amount should be equal to the amount the user sent to withdraw --> this cannot work as the user will most likely have more winnings than the amount he sent to withdraw
+    // if total_winnings.amount != amount.to_string() {
+    //     return Err(ContractError::Std(StdError::generic_err(
+    //         "Total winnings do not match the amount sent to withdraw",
+    //     )));
+    // }
 
     // Create bank transfer message
     let transfer_msg = MsgSend {
