@@ -5,7 +5,7 @@ mod tests {
 
     use chrono::Utc;
     use coreum_test_tube::{Account, Bank, CoreumTestApp, Module, Runner, SigningAccount, Wasm};
-    use coreum_wasm_sdk::types::cosmos::bank::v1beta1::QueryBalanceRequest;
+    use coreum_wasm_sdk::types::cosmos::bank::v1beta1::{MsgSend, QueryBalanceRequest};
     use coreum_wasm_sdk::types::cosmwasm::wasm::v1::{
         QueryContractInfoRequest, QueryContractInfoResponse,
     };
@@ -766,5 +766,462 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("Market is already resolved"));
+    }
+
+    #[test]
+    fn test_sell_shares_functionality() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+        let bank = Bank::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // User1 buys shares for "Yes"
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(2000, BUY_TOKEN)],
+            &user1,
+        )
+        .unwrap();
+
+        // Get market info to find token denom
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Check user's shares before selling
+        let shares_before: AllSharesResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetShares {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user1.address()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(shares_before.shares.len(), 1);
+        assert_eq!(shares_before.shares[0].option, "Yes");
+        assert_eq!(shares_before.shares[0].amount.amount, "2000");
+
+        // Get user's token balance before selling
+        let token_balance_before = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user1.address().to_string(),
+                denom: market.token_a.denom.clone(), // "Yes" token
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(token_balance_before, "2000");
+
+        // User1 sells half of their shares (1000 tokens)
+        let sell_res = wasm
+            .execute(
+                &market_address,
+                &ExecuteMsg::SellShare {
+                    option: "Yes".to_string(),
+                },
+                &[coin(1000, &market.token_a.denom)], // Send tokens to sell
+                &user1,
+            )
+            .unwrap();
+
+        // Verify the transaction was successful
+        assert!(sell_res.events.iter().any(|e| e.ty == "wasm"));
+
+        // Check user's shares after selling
+        let shares_after: AllSharesResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetShares {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user1.address()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(shares_after.shares.len(), 1);
+        assert_eq!(shares_after.shares[0].option, "Yes");
+        assert_eq!(shares_after.shares[0].amount.amount, "1000"); // Reduced from 2000 to 1000
+
+        // Check token balance after selling (should be reduced due to burning)
+        let token_balance_after = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user1.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(token_balance_after, "1000"); // Reduced from 2000 to 1000
+
+        // Verify market totals updated correctly
+        let total_shares: TotalSharesPerOptionResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetTotalSharesPerOption {
+                    market_id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(total_shares.amount_a.amount, "1000"); // Was 2000, now 1000 after selling
+        assert_eq!(total_shares.amount_b.amount, "0"); // No shares for "No"
+
+        // Verify total value decreased
+        let total_value: TotalValueResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetTotalValue {
+                    market_id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(total_value.total_value.amount, "1000"); // Was 2000, now 1000
+    }
+
+    #[test]
+    fn test_sell_more_shares_than_owned_fails() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // User1 buys shares for "Yes"
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, BUY_TOKEN)],
+            &user1,
+        )
+        .unwrap();
+
+        // Get market info to find token denom
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Try to sell more tokens than owned (should fail)
+        let result = wasm.execute(
+            &market_address,
+            &ExecuteMsg::SellShare {
+                option: "Yes".to_string(),
+            },
+            &[coin(2000, &market.token_a.denom)], // Trying to sell 2000 when only has 1000
+            &user1,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        println!("Error message: {}", error_msg);
+        //we get an expected bank message error
+        // assert!(error_msg.contains("Insufficient shares to sell"));
+    }
+
+    #[test]
+    fn test_sell_shares_no_shares_owned_fails() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // Get market info to find token denom (needed for attempting to sell)
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Try to sell shares without owning any (should fail)
+        let result = wasm.execute(
+            &market_address,
+            &ExecuteMsg::SellShare {
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, &market.token_a.denom)],
+            &user1,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        println!("Error message: {}", error_msg);
+        //we get an expected bank message error
+        // assert!(error_msg.contains("Insufficient shares to sell"));
+    }
+
+    #[test]
+    fn test_transfer_shares_then_sell_by_recipient() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let oracle = app
+            .init_account(&[coin(100_000_000_000_000_000_000u128, FEE_DENOM)])
+            .unwrap();
+        let user_a = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let user_b = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+        let bank = Bank::new(&app);
+
+        let (_registry_address, market_address) =
+            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+
+        // User A buys shares for "Yes"
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(2000, BUY_TOKEN)],
+            &user_a,
+        )
+        .unwrap();
+
+        // Get market info to find token denom
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        // Verify User A has the tokens and shares
+        let user_a_token_balance_before = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user_a.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        let user_a_shares_before: AllSharesResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetShares {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user_a.address()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(user_a_token_balance_before, "2000");
+        assert_eq!(user_a_shares_before.shares.len(), 1);
+        assert_eq!(user_a_shares_before.shares[0].amount.amount, "2000");
+
+        // User A transfers 1500 tokens to User B using bank send
+        bank.send(
+            MsgSend {
+                from_address: user_a.address().to_string(),
+                to_address: user_b.address().to_string(),
+                amount: vec![coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin {
+                    denom: market.token_a.denom.clone(),
+                    amount: "1500".to_string(),
+                }],
+            },
+            &user_a,
+        )
+        .unwrap();
+
+        // Verify User B received the tokens
+        let user_b_token_balance_after_transfer = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user_b.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(user_b_token_balance_after_transfer, "1500");
+
+        // Verify User A has remaining tokens
+        let user_a_token_balance_after_transfer = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user_a.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(user_a_token_balance_after_transfer, "500");
+
+        // Check that User A still has shares recorded in the market contract
+        // (shares tracking is separate from token ownership)
+        let user_a_shares_after_transfer: AllSharesResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetShares {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user_a.address()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(user_a_shares_after_transfer.shares.len(), 1);
+        assert_eq!(user_a_shares_after_transfer.shares[0].amount.amount, "2000"); // Shares tracking unchanged
+
+        // User B (who now has tokens but no recorded shares) tries to sell the tokens
+        let result_b = wasm.execute(
+            &market_address,
+            &ExecuteMsg::SellShare {
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, &market.token_a.denom)], // User B tries to sell 1000 of the 1500 received tokens
+            &user_b,
+        );
+
+        // This should fail because User B has no recorded shares in the market contract
+        assert!(result_b.is_err());
+        let error_msg_b = result_b.unwrap_err().to_string();
+        println!("User B sell error: {}", error_msg_b);
+        // User B should get an error because they don't have shares recorded
+
+        // User A can still sell their remaining tokens because they have recorded shares
+        let result_a = wasm.execute(
+            &market_address,
+            &ExecuteMsg::SellShare {
+                option: "Yes".to_string(),
+            },
+            &[coin(500, &market.token_a.denom)], // User A sells their remaining 500 tokens
+            &user_a,
+        );
+
+        // This should succeed because User A has recorded shares
+        assert!(result_a.is_ok());
+
+        // Verify User A's shares were reduced
+        let user_a_shares_after_sell: AllSharesResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetShares {
+                    market_id: "test_market_1".to_string(),
+                    user: Addr::unchecked(user_a.address()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(user_a_shares_after_sell.shares.len(), 1);
+        assert_eq!(user_a_shares_after_sell.shares[0].amount.amount, "1500"); // Reduced from 2000 to 1500
+
+        // Verify User A's token balance is now 0 (sold the 500 they had left)
+        let user_a_final_token_balance = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user_a.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(user_a_final_token_balance, "0");
+
+        // User B still has their 1500 tokens but cannot sell them through the market contract
+        let user_b_final_token_balance = bank
+            .query_balance(&QueryBalanceRequest {
+                address: user_b.address().to_string(),
+                denom: market.token_a.denom.clone(),
+            })
+            .unwrap()
+            .balance
+            .unwrap()
+            .amount;
+
+        assert_eq!(user_b_final_token_balance, "1500");
     }
 }
