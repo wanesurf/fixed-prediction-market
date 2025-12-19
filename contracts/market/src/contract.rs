@@ -269,7 +269,7 @@ pub fn buy_share(
                 // Update existing share for the same option
                 share.amount += payment;
             } else {
-                ///TODO: this should never happen
+                // TODO: this should never happen
                 return Err(ContractError::Std(StdError::generic_err(
                     "User already has two shares with different options",
                 )));
@@ -474,7 +474,20 @@ pub mod query {
         let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
         let (odds_a, odds_b) = market_state.calculate_odds(&config);
-        Ok(OddsResponse { odds_a, odds_b })
+
+        use crate::msg::OptionOdds;
+        Ok(OddsResponse {
+            odds: vec![
+                OptionOdds {
+                    option: config.pairs[0].text.clone(),
+                    odds: odds_a,
+                },
+                OptionOdds {
+                    option: config.pairs[1].text.clone(),
+                    odds: odds_b,
+                },
+            ],
+        })
     }
 
     pub fn query_total_value(deps: Deps) -> StdResult<TotalValueResponse> {

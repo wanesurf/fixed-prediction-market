@@ -84,9 +84,14 @@ pub struct MarketResponse {
 }
 
 #[cw_serde]
+pub struct OptionOdds {
+    pub option: String,
+    pub odds: Decimal,
+}
+
+#[cw_serde]
 pub struct OddsResponse {
-    pub odds_a: Decimal,
-    pub odds_b: Decimal,
+    pub odds: Vec<OptionOdds>,
 }
 
 #[cw_serde]

@@ -37,7 +37,7 @@ pub struct Config {
     pub id: String,
     pub registry_address: Addr,
     pub commission_rate: Decimal,
-    pub pairs: Vec<MarketOption>, //represent the options and the tokens
+    pub pairs: Vec<MarketOption>, //represent the options and the tokens --> rename to options
     pub buy_token: String,        // Denom for the token used to buy shares
     pub banner_url: String,       // URL for the banner image
     pub description: String,      // Description of the market

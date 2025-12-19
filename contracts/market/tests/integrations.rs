@@ -312,6 +312,22 @@ mod tests {
 
         assert_eq!(total_shares.amount_a.amount, "1000"); // Yes option
         assert_eq!(total_shares.amount_b.amount, "2000"); // No option
+
+        // Query the odds
+        let odds: OddsResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetOdds {
+                    market_id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+        println!(
+            "{} odds: {}, {} odds: {}",
+            odds.odds[0].option, odds.odds[0].odds, odds.odds[1].option, odds.odds[1].odds
+        );
+        assert!(odds.odds[0].odds > Decimal::zero());
+        assert!(odds.odds[1].odds > Decimal::zero());
     }
 
     #[test]
@@ -526,16 +542,19 @@ mod tests {
             )
             .unwrap();
 
-        println!("Odds A: {}, Odds B: {}", odds.odds_a, odds.odds_b);
+        println!(
+            "{} odds: {}, {} odds: {}",
+            odds.odds[0].option, odds.odds[0].odds, odds.odds[1].option, odds.odds[1].odds
+        );
 
         // With 3000 on "Yes" and 1000 on "No":
         // odds_a (Yes) = 1000/3000 = 0.333...
         // odds_b (No) = 3000/1000 = 3.0
         assert_eq!(
-            odds.odds_a,
+            odds.odds[0].odds,
             Decimal::from_str("0.333333333333333333").unwrap()
         );
-        assert_eq!(odds.odds_b, Decimal::from_str("3").unwrap());
+        assert_eq!(odds.odds[1].odds, Decimal::from_str("3").unwrap());
     }
 
     #[test]
