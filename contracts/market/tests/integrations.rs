@@ -1,14 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use std::ops::Mul;
     use std::str::FromStr;
 
     use chrono::Utc;
-    use coreum_test_tube::{Account, Bank, CoreumTestApp, Module, Runner, SigningAccount, Wasm};
+    use coreum_test_tube::{Account, Bank, CoreumTestApp, Module, SigningAccount, Wasm};
     use coreum_wasm_sdk::types::cosmos::bank::v1beta1::{MsgSend, QueryBalanceRequest};
-    use coreum_wasm_sdk::types::cosmwasm::wasm::v1::{
-        QueryContractInfoRequest, QueryContractInfoResponse,
-    };
 
     use cosmwasm_std::{coin, Addr, Decimal, Timestamp, Uint128};
     use market::msg::{
@@ -16,7 +12,7 @@ mod tests {
         TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse,
         UserWinningsResponse,
     };
-    use market::state::{MarketOption, MarketStatus};
+    use market::state::MarketStatus;
     use registry::msg::{
         ExecuteMsg as RegistryExecuteMsg, InstantiateMsg as RegistryInstantiateMsg,
         QueryMsg as RegistryQueryMsg,

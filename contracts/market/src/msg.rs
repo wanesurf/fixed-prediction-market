@@ -7,6 +7,9 @@ use cosmwasm_std::{Addr, Decimal, Timestamp};
 use crate::state::{MarketOption, MarketStatus};
 
 #[cw_serde]
+pub struct MigrateMsg {}
+
+#[cw_serde]
 pub struct InstantiateMsg {
     pub id: String,
     pub admin: Addr,

@@ -1,7 +1,10 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{
+    to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+};
 use cw2::set_contract_version;
+use market::msg::MigrateMsg;
 
 use crate::error::ContractError;
 use crate::execute;
@@ -79,4 +82,15 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::Market { market_id } => to_json_binary(&query::query_market(deps, market_id)?),
         QueryMsg::ListMarkets {} => to_json_binary(&query::query_list_markets(deps)?),
     }
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    let ver = cw2::get_contract_version(deps.storage)?;
+
+    if ver.contract != CONTRACT_NAME {
+        return Err(StdError::generic_err("Can only upgrade from same contract type").into());
+    }
+    set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    Ok(Response::default())
 }
