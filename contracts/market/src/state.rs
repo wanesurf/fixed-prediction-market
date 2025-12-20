@@ -55,6 +55,7 @@ pub struct MarketState {
     pub num_bettors: u64,              // Number of unique bettors
     pub total_stake_option_a: Uint128, // Pre-calculated total for option A
     pub total_stake_option_b: Uint128, // Pre-calculated total for option B
+    pub volume: Uint128,               // Total volume of the market
 }
 
 pub const CONFIG: Item<Config> = Item::new("config");

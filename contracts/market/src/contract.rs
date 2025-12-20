@@ -3,7 +3,7 @@ use std::str::FromStr;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdError, StdResult,
+    to_json_binary, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult,
 };
 use cw2::set_contract_version;
 
@@ -130,6 +130,7 @@ pub fn instantiate(
         },
         total_stake_option_a: Uint128::zero(),
         total_stake_option_b: Uint128::zero(),
+        volume: Uint128::zero(),
     };
 
     let market_config = Config {
@@ -151,8 +152,20 @@ pub fn instantiate(
     CONFIG.save(deps.storage, &market_config)?;
 
     Ok(Response::new()
-        .add_attribute("action", "create_market")
-        .add_attribute("market_id", msg.id)
+        .add_event(
+            Event::new("cc_create_market")
+                .add_attribute("market_id", msg.id)
+                .add_attribute("admin", msg.admin)
+                .add_attribute("commission_rate", msg.commission_rate.to_string())
+                .add_attribute("buy_token", msg.buy_token)
+                .add_attribute("banner_url", msg.banner_url)
+                .add_attribute("description", msg.description)
+                .add_attribute("title", msg.title)
+                .add_attribute("start_time", msg.start_time.to_string())
+                .add_attribute("end_time", msg.end_time.to_string())
+                .add_attribute("resolution_source", msg.resolution_source)
+                .add_attribute("oracle", msg.oracle),
+        )
         .add_message(CosmosMsg::Any(issue_token_a.to_any()))
         .add_message(CosmosMsg::Any(issue_token_b.to_any())))
 }
@@ -239,7 +252,11 @@ pub fn sell_share(
     // The tax amount stays in the pot, benefiting remaining participants
     let new_total_value =
         Uint128::from_str(&market_state.total_value.amount).unwrap() - amount_after_tax;
+
     market_state.total_value.amount = new_total_value.to_string();
+
+    // Update volume
+    market_state.volume += amount_sent;
 
     // Save the updated market state
     MARKET_STATE.save(deps.storage, &market_state)?;
@@ -269,13 +286,38 @@ pub fn sell_share(
         messages.push(CosmosMsg::Any(return_msg.to_any()));
     }
 
-    Ok(Response::new()
-        .add_attribute("action", "sell_share")
-        .add_attribute("option", market_option.text)
-        .add_attribute("tokens_sent", amount_sent.to_string())
-        .add_attribute("amount_after_tax", amount_after_tax.to_string())
-        .add_attribute("tax_amount", tax_amount.to_string())
-        .add_attribute("tax_rate", tax_rate.to_string())
+    let config = CONFIG.load(deps.storage)?;
+    let (odds_a, odds_b) = market_state.calculate_odds(&config);
+
+    let response = Response::new();
+
+    Ok(response
+        .add_event(
+            Event::new("cc_prediction_market_sell_share")
+                .add_attribute("market_id", config.id)
+                .add_attribute("option", market_option.text)
+                .add_attribute("tokens_sent", amount_sent.to_string())
+                .add_attribute("amount_after_tax", amount_after_tax.to_string())
+                .add_attribute("tax_amount", tax_amount.to_string())
+                .add_attribute("tax_rate", tax_rate.to_string())
+                .add_attribute("user", info.sender)
+                .add_attribute("total_value", new_total_value.to_string())
+                .add_attribute("total_volume", market_state.volume.to_string())
+                .add_attribute(
+                    "odds",
+                    cosmwasm_std::to_json_string(&vec![
+                        crate::msg::OptionOdds {
+                            option: config.pairs[0].text.clone(),
+                            odds: odds_a,
+                        },
+                        crate::msg::OptionOdds {
+                            option: config.pairs[1].text.clone(),
+                            odds: odds_b,
+                        },
+                    ])
+                    .unwrap_or_else(|_| "[]".to_string()),
+                ),
+        )
         .add_messages(messages))
 }
 
@@ -343,6 +385,9 @@ pub fn buy_share(
         market_state.total_stake_option_b += payment;
     }
 
+    // Update volume
+    market_state.volume += payment;
+
     // Update total value
     let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + payment;
     market_state.total_value.amount = new_total_value.to_string();
@@ -360,10 +405,36 @@ pub fn buy_share(
         recipient: info.sender.to_string(),
     };
 
-    Ok(Response::new()
-        .add_attribute("action", "buy_share")
-        .add_attribute("option", market_option.text)
-        .add_attribute("amount", payment.to_string())
+    let response = Response::new();
+
+    let (odds_a, odds_b) = market_state.calculate_odds(&config);
+    let odds = vec![
+        crate::msg::OptionOdds {
+            option: config.pairs[0].text.clone(),
+            odds: odds_a,
+        },
+        crate::msg::OptionOdds {
+            option: config.pairs[1].text.clone(),
+            odds: odds_b,
+        },
+    ];
+
+    let total_value = Uint128::from_str(&market_state.total_value.amount).unwrap();
+
+    Ok(response
+        .add_event(
+            Event::new("cc_prediction_market_buy_share")
+                .add_attribute("market_id", config.id)
+                .add_attribute("option", market_option.text)
+                .add_attribute("amount", payment.to_string())
+                .add_attribute("user", info.sender.to_string())
+                .add_attribute("total_value", total_value.to_string())
+                .add_attribute("total_volume", market_state.volume.to_string())
+                .add_attribute(
+                    "odds",
+                    cosmwasm_std::to_json_string(&odds).unwrap_or_else(|_| "[]".to_string()),
+                ),
+        )
         .add_message(CosmosMsg::Any(mint_msg.to_any())))
 }
 
@@ -411,7 +482,13 @@ pub fn resolve(
     // Save the updated market state
     MARKET_STATE.save(deps.storage, &market_state)?;
 
-    Ok(Response::new().add_attribute("action", "resolve"))
+    Ok(Response::new().add_event(
+        Event::new("cc_prediction_market_resolve")
+            .add_attribute("market_id", config.id)
+            .add_attribute("winning_option", winning_option)
+            .add_attribute("user", info.sender.to_string())
+            .add_attribute("total_value", market_state.total_value.amount.to_string()),
+    ))
 }
 
 pub fn withdraw(
@@ -474,12 +551,16 @@ pub fn withdraw(
         }],
     };
 
-    Ok(Response::new()
-        .add_message(CosmosMsg::Any(transfer_msg.to_any()))
-        .add_attribute("action", "withdraw")
-        .add_attribute("market_id", market_id)
-        .add_attribute("user", info.sender)
-        .add_attribute("total_winnings", total_winnings.amount))
+    let response = Response::new();
+
+    Ok(response
+        .add_event(
+            Event::new("cc_prediction_market_withdraw")
+                .add_attribute("market_id", market_id)
+                .add_attribute("user", info.sender.to_string())
+                .add_attribute("total_winnings", total_winnings.amount.to_string()),
+        )
+        .add_message(CosmosMsg::Any(transfer_msg.to_any())))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
