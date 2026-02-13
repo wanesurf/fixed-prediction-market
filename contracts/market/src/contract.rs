@@ -7,10 +7,7 @@ use cosmwasm_std::{
 };
 use cw2::set_contract_version;
 
-//TODO: Add query_current_liquidity
-//TODO: Add query_odds
-//TODO: Add
-
+/// TODO: Price per share at each buy and sell
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 use crate::state::{
@@ -223,6 +220,10 @@ pub fn sell_share(
         market_state.calculate_sell_amount_with_tax(&config, amount_sent, env.block.time);
     let tax_amount = amount_sent - amount_after_tax;
 
+    // Calculate commission on the amount after tax
+    let commission_amount = amount_after_tax * config.commission_rate;
+    let final_amount = amount_after_tax - commission_amount;
+
     // Update share using Map - O(1) operation
     SHARES.update(
         deps.storage,
@@ -241,17 +242,17 @@ pub fn sell_share(
         },
     )?;
 
-    // Update aggregate totals - reduce by full amount sent (user's share position decreases)
+    // Update aggregate totals - reduce by final amount (user's effective stake decrease)
     if market_option.text == config.pairs[0].text {
-        market_state.total_stake_option_a -= amount_after_tax;
+        market_state.total_stake_option_a -= final_amount;
     } else {
-        market_state.total_stake_option_b -= amount_after_tax;
+        market_state.total_stake_option_b -= final_amount;
     }
 
     // Update total value - only reduce by the amount returned to user
-    // The tax amount stays in the pot, benefiting remaining participants
+    // The tax and commission amounts stay in the pot, benefiting remaining participants
     let new_total_value =
-        Uint128::from_str(&market_state.total_value.amount).unwrap() - amount_after_tax;
+        Uint128::from_str(&market_state.total_value.amount).unwrap() - final_amount;
 
     market_state.total_value.amount = new_total_value.to_string();
 
@@ -270,17 +271,17 @@ pub fn sell_share(
         }),
     };
 
-    // Send back only the amount after tax to the user
-    // The tax amount effectively stays in the market pot, benefiting remaining participants
+    // Send back only the final amount to the user
+    // The tax and commission amounts effectively stay in the market pot, benefiting remaining participants
     let mut messages = vec![CosmosMsg::Any(burn_msg.to_any())];
 
-    if amount_after_tax > Uint128::zero() {
+    if final_amount > Uint128::zero() {
         let return_msg = MsgSend {
             from_address: env.contract.address.to_string(),
             to_address: info.sender.to_string(),
             amount: vec![Coin {
                 denom: config.buy_token.clone(),
-                amount: amount_after_tax.to_string(),
+                amount: final_amount.to_string(),
             }],
         };
         messages.push(CosmosMsg::Any(return_msg.to_any()));
@@ -300,6 +301,8 @@ pub fn sell_share(
                 .add_attribute("amount_after_tax", amount_after_tax.to_string())
                 .add_attribute("tax_amount", tax_amount.to_string())
                 .add_attribute("tax_rate", tax_rate.to_string())
+                .add_attribute("commission_amount", commission_amount.to_string())
+                .add_attribute("final_amount", final_amount.to_string())
                 .add_attribute("user", info.sender)
                 .add_attribute("total_value", new_total_value.to_string())
                 .add_attribute("total_volume", market_state.volume.to_string())
@@ -332,6 +335,10 @@ pub fn buy_share(
     let mut market_state = MARKET_STATE.load(deps.storage)?;
 
     let payment: Uint128 = must_pay(&info, &config.buy_token)?;
+
+    // Calculate commission
+    let commission_amount = payment * config.commission_rate;
+    let net_payment = payment - commission_amount;
 
     // Check if the market is already resolved
     if matches!(market_state.status, MarketStatus::Resolved(_)) {
@@ -367,11 +374,11 @@ pub fn buy_share(
         |existing| -> StdResult<Share> {
             match existing {
                 Some(mut share) => {
-                    share.amount += payment;
+                    share.amount += net_payment;
                     Ok(share)
                 }
                 None => Ok(Share {
-                    amount: payment,
+                    amount: net_payment,
                     has_withdrawn: false,
                 }),
             }
@@ -380,16 +387,16 @@ pub fn buy_share(
 
     // Update aggregate totals
     if market_option.text == config.pairs[0].text {
-        market_state.total_stake_option_a += payment;
+        market_state.total_stake_option_a += net_payment;
     } else {
-        market_state.total_stake_option_b += payment;
+        market_state.total_stake_option_b += net_payment;
     }
 
     // Update volume
     market_state.volume += payment;
 
     // Update total value
-    let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + payment;
+    let new_total_value = Uint128::from_str(&market_state.total_value.amount).unwrap() + net_payment;
     market_state.total_value.amount = new_total_value.to_string();
 
     // Save the updated market state
@@ -400,7 +407,7 @@ pub fn buy_share(
         sender: env.contract.address.to_string(),
         coin: Some(Coin {
             denom: market_option.associated_token_denom.clone(),
-            amount: payment.to_string(),
+            amount: net_payment.to_string(),
         }),
         recipient: info.sender.to_string(),
     };
@@ -427,6 +434,8 @@ pub fn buy_share(
                 .add_attribute("market_id", config.id)
                 .add_attribute("option", market_option.text)
                 .add_attribute("amount", payment.to_string())
+                .add_attribute("net_amount", net_payment.to_string())
+                .add_attribute("commission_amount", commission_amount.to_string())
                 .add_attribute("user", info.sender.to_string())
                 .add_attribute("total_value", total_value.to_string())
                 .add_attribute("total_volume", market_state.volume.to_string())

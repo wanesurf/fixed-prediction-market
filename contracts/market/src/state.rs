@@ -128,13 +128,12 @@ impl MarketState {
             .map(|s| s.amount)
             .unwrap_or_default();
 
+        // Commission is now taken during buy/sell operations, so no need to apply it here
         let user_stake_a_after_commission = Decimal::from_str(&user_stake_a.to_string())
-            .unwrap_or_default()
-            * (Decimal::one() - config.commission_rate);
+            .unwrap_or_default();
 
         let user_stake_b_after_commission = Decimal::from_str(&user_stake_b.to_string())
-            .unwrap_or_default()
-            * (Decimal::one() - config.commission_rate);
+            .unwrap_or_default();
 
         let winnings_a = Decimal::from_str(&user_stake_a_after_commission.to_string())
             .unwrap_or_default()
