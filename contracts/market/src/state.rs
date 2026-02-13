@@ -36,7 +36,7 @@ pub enum MarketStatus {
 pub struct Config {
     pub id: String,
     pub admin: Addr,
-    pub commission_rate: Decimal,
+    pub commission_rate: Uint128, // in basis points (BPS), e.g., 500 = 5%
     pub pairs: Vec<MarketOption>, //represent the options and the tokens --> rename to options
     pub buy_token: String,        // Denom for the token used to buy shares
     pub banner_url: String,       // URL for the banner image

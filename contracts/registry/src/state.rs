@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Coin, Decimal, Timestamp};
+use cosmwasm_std::{Addr, Coin, Decimal, Timestamp, Uint128};
 use cw_storage_plus::{Item, Map};
 
 /// Config
@@ -8,7 +8,7 @@ use cw_storage_plus::{Item, Map};
 pub struct Config {
     pub admin: Addr,
     pub oracle: Addr,
-    pub commission_rate: Decimal,
+    pub commission_rate: Uint128,
     //code IDs
     pub market_code_id: u64,
 }
@@ -59,7 +59,7 @@ pub struct MarketInfo {
     pub title: String,            // Title of the market
     pub resolution_source: String,
     pub oracle: Addr,
-    pub commission_rate: Decimal,
+    pub commission_rate: Uint128,
     pub market_code_id: u64,
 }
 

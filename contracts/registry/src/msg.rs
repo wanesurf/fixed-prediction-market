@@ -1,6 +1,6 @@
 use crate::state::{Config, MarketInfo};
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Decimal, Timestamp};
+use cosmwasm_std::{Addr, Timestamp, Uint128};
 
 #[cw_serde]
 pub struct MigrateMsg {}
@@ -8,7 +8,7 @@ pub struct MigrateMsg {}
 #[cw_serde]
 pub struct InstantiateMsg {
     pub oracle: Addr,
-    pub commission_rate: Decimal,
+    pub commission_rate: Uint128,
     pub market_code_id: u64,
 }
 

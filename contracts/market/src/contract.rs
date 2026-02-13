@@ -220,8 +220,8 @@ pub fn sell_share(
         market_state.calculate_sell_amount_with_tax(&config, amount_sent, env.block.time);
     let tax_amount = amount_sent - amount_after_tax;
 
-    // Calculate commission on the amount after tax
-    let commission_amount = amount_after_tax * config.commission_rate;
+    // Calculate commission on the amount after tax using BPS (basis points)
+    let commission_amount = amount_after_tax * config.commission_rate / Uint128::from(10000u128);
     let final_amount = amount_after_tax - commission_amount;
 
     // Update share using Map - O(1) operation
@@ -336,8 +336,8 @@ pub fn buy_share(
 
     let payment: Uint128 = must_pay(&info, &config.buy_token)?;
 
-    // Calculate commission
-    let commission_amount = payment * config.commission_rate;
+    // Calculate commission using BPS (basis points)
+    let commission_amount = payment * config.commission_rate / Uint128::from(10000u128);
     let net_payment = payment - commission_amount;
 
     // Check if the market is already resolved

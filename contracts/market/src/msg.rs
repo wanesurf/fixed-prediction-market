@@ -2,7 +2,7 @@ use coreum_wasm_sdk::types::{
     coreum::asset::ft::v1::QueryBalanceResponse, cosmos::base::v1beta1::Coin,
 };
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Decimal, Timestamp};
+use cosmwasm_std::{Addr, Decimal, Timestamp, Uint128};
 
 use crate::state::{MarketOption, MarketStatus};
 
@@ -16,7 +16,7 @@ pub struct InstantiateMsg {
     pub options: Vec<String>, //outcomes options
     pub start_time: Timestamp,
     pub end_time: Timestamp,
-    pub commission_rate: Decimal,
+    pub commission_rate: Uint128, // in basis points (BPS), e.g., 500 = 5%
     pub buy_token: String,
     pub banner_url: String,
     pub description: String,
