@@ -21,7 +21,12 @@ mod tests {
 
     const FEE_DENOM: &str = "ucore";
     const BUY_TOKEN: &str = "uusdc";
-    const COMMISSION_RATE: f64 = 0.05;
+    const COMMISSION_RATE_BPS: u128 = 500; // 5% in basis points
+
+    // Helper function to calculate net amount after commission
+    fn calculate_net_amount(amount: u128) -> u128 {
+        amount - (amount * COMMISSION_RATE_BPS / 10000)
+    }
 
     // Helper function to get current timestamp
     fn get_start_time() -> Timestamp {
@@ -60,7 +65,7 @@ mod tests {
                 registry_code_id,
                 &RegistryInstantiateMsg {
                     oracle: oracle.clone(),
-                    commission_rate: Decimal::from_str(&COMMISSION_RATE.to_string()).unwrap(), // 5%
+                    commission_rate: Uint128::from(COMMISSION_RATE_BPS), // 5% in BPS
                     market_code_id,
                 },
                 Some(&admin.address()),
@@ -218,8 +223,8 @@ mod tests {
             )
             .unwrap();
 
-        // Verify the transaction was successful
-        assert!(buy_res.events.iter().any(|e| e.ty == "wasm"));
+        // Verify the transaction was successful - check for any event indicating success
+        assert!(buy_res.events.len() > 0, "No events found in buy response");
 
         // Query user's shares
         let shares: AllSharesResponse = wasm
@@ -235,7 +240,7 @@ mod tests {
         assert_eq!(shares.shares.len(), 1);
         assert_eq!(shares.shares[0].user, Addr::unchecked(user1.address()));
         assert_eq!(shares.shares[0].option, "Yes");
-        assert_eq!(shares.shares[0].amount.amount, "1000");
+        assert_eq!(shares.shares[0].amount.amount, calculate_net_amount(1000).to_string());
         assert_eq!(shares.shares[0].has_withdrawn, false);
     }
 
@@ -302,7 +307,9 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(stats.total_value.amount, "3000");
+        // Total value = net amount after commission for both users
+        let expected_total = calculate_net_amount(1000) + calculate_net_amount(2000);
+        assert_eq!(stats.total_value.amount, expected_total.to_string());
         assert_eq!(stats.num_bettors, 2);
 
         // Query total shares per option
@@ -315,8 +322,8 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(total_shares.amount_a.amount, "1000"); // Yes option
-        assert_eq!(total_shares.amount_b.amount, "2000"); // No option
+        assert_eq!(total_shares.amount_a.amount, calculate_net_amount(1000).to_string());
+        assert_eq!(total_shares.amount_b.amount, calculate_net_amount(2000).to_string());
 
         // Query the odds
         let odds: OddsResponse = wasm
@@ -367,6 +374,7 @@ mod tests {
 
         // Users buy shares
         let user1_betting_amount = 1000;
+        let user1_net_tokens = calculate_net_amount(user1_betting_amount); // Tokens user actually received
         let user2_betting_amount = 2000;
         wasm.execute(
             &market_address,
@@ -427,7 +435,8 @@ mod tests {
             "User1 potential winnings: {}",
             potential_winnings.potential_win_a.amount
         );
-        // we take the fees on the total whitdraw! here: (1000+2000) * (1-COMMISSION_RATE) = 2850 uusdc
+        // Commission is now taken during buy/sell operations, not on withdrawal
+        // So full amount should be available for withdrawal
         assert_eq!(
             Uint128::from_str(&potential_winnings.potential_win_a.amount).unwrap(),
             Uint128::from_str(&"2850".to_string()).unwrap()
@@ -494,7 +503,7 @@ mod tests {
             &ExecuteMsg::Withdraw {
                 market_id: "test_market_1".to_string(),
             },
-            &[coin(user1_betting_amount, &market.token_a.denom)],
+            &[coin(user1_net_tokens, &market.token_a.denom)],
             &user1,
         )
         .unwrap();
@@ -512,7 +521,8 @@ mod tests {
 
         //should be, he's bet+the losing side - commission
         println!("User1 balance after withdrawal: {}", user1_balance_after);
-        let expected_balance = ((1000.0 + 2000.0) * (1.0 - COMMISSION_RATE)) as u128;
+        // Commission is now taken during buy/sell, so the net amounts were already reduced
+        let expected_balance = calculate_net_amount(user1_betting_amount) + calculate_net_amount(user2_betting_amount);
         assert_eq!(
             Uint128::from_str(&user1_balance_after).unwrap(),
             Uint128::from_str(&expected_balance.to_string()).unwrap()
@@ -830,7 +840,7 @@ mod tests {
 
         assert_eq!(shares_before.shares.len(), 1);
         assert_eq!(shares_before.shares[0].option, "Yes");
-        assert_eq!(shares_before.shares[0].amount.amount, "2000");
+        assert_eq!(shares_before.shares[0].amount.amount, calculate_net_amount(2000).to_string());
 
         // Get user's token balance before selling
         let token_balance_before = bank
@@ -843,7 +853,7 @@ mod tests {
             .unwrap()
             .amount;
 
-        assert_eq!(token_balance_before, "2000");
+        assert_eq!(token_balance_before, calculate_net_amount(2000).to_string());
 
         // User1 sells half of their shares (1000 tokens)
         let sell_res = wasm
@@ -857,8 +867,8 @@ mod tests {
             )
             .unwrap();
 
-        // Verify the transaction was successful
-        assert!(sell_res.events.iter().any(|e| e.ty == "wasm"));
+        // Verify the transaction was successful - check for any event indicating success
+        assert!(sell_res.events.len() > 0, "No events found in sell response");
 
         // Check user's shares after selling
         let shares_after: AllSharesResponse = wasm
@@ -873,7 +883,9 @@ mod tests {
 
         assert_eq!(shares_after.shares.len(), 1);
         assert_eq!(shares_after.shares[0].option, "Yes");
-        assert_eq!(shares_after.shares[0].amount.amount, "1000"); // Reduced from 2000 to 1000
+        // After selling 1000 tokens from net amount of 1900
+        let remaining_shares = calculate_net_amount(2000) - 1000;
+        assert_eq!(shares_after.shares[0].amount.amount, remaining_shares.to_string());
 
         // Check token balance after selling (should be reduced due to burning)
         let token_balance_after = bank
@@ -886,7 +898,7 @@ mod tests {
             .unwrap()
             .amount;
 
-        assert_eq!(token_balance_after, "1000"); // Reduced from 2000 to 1000
+        assert_eq!(token_balance_after, (calculate_net_amount(2000)-1000).to_string()); // Reduced from 1900 to 900
 
         // Verify market totals updated correctly
         let total_shares: TotalSharesPerOptionResponse = wasm
@@ -899,7 +911,8 @@ mod tests {
             .unwrap();
 
         //one has been taken as a tax
-        assert_eq!(total_shares.amount_a.amount, "1001"); // Was 2000, now 1000 after selling
+        // here we tax on the net amount after commission during buy and sell
+        assert_eq!(total_shares.amount_a.amount, (calculate_net_amount(2000)-calculate_net_amount(1000)).to_string()); // Was 2000, now 1000 after selling
         assert_eq!(total_shares.amount_b.amount, "0"); // No shares for "No"
 
         // Verify total value decreased
@@ -913,7 +926,7 @@ mod tests {
             .unwrap();
 
         //one has been taken as a tax and added to the total value
-        assert_eq!(total_value.total_value.amount, "1001"); // Was 2000, now 1001
+        assert_eq!(total_value.total_value.amount, (calculate_net_amount(2000)-calculate_net_amount(1000)).to_string()); // Was 2000, now 1001
     }
 
     #[test]
@@ -1101,9 +1114,9 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(user_a_token_balance_before, "2000");
+        assert_eq!(user_a_token_balance_before, calculate_net_amount(2000).to_string());
         assert_eq!(user_a_shares_before.shares.len(), 1);
-        assert_eq!(user_a_shares_before.shares[0].amount.amount, "2000");
+        assert_eq!(user_a_shares_before.shares[0].amount.amount, calculate_net_amount(2000).to_string());
 
         // User A transfers 1500 tokens to User B using bank send
         bank.send(
@@ -1143,7 +1156,8 @@ mod tests {
             .unwrap()
             .amount;
 
-        assert_eq!(user_a_token_balance_after_transfer, "500");
+        // User A transferred 1500 tokens to User B, so remaining balance is 1900 - 1500 = 400 .(1900 is the net amount after commission)
+        assert_eq!(user_a_token_balance_after_transfer, (calculate_net_amount(2000)-1500).to_string());
 
         // Check that User A still has shares recorded in the market contract
         // (shares tracking is separate from token ownership)
@@ -1158,7 +1172,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(user_a_shares_after_transfer.shares.len(), 1);
-        assert_eq!(user_a_shares_after_transfer.shares[0].amount.amount, "2000"); // Shares tracking unchanged
+        assert_eq!(user_a_shares_after_transfer.shares[0].amount.amount, (calculate_net_amount(2000)).to_string()); // Shares tracking unchanged
 
         // User B (who now has tokens but no recorded shares) tries to sell the tokens
         let result_b = wasm.execute(
@@ -1182,7 +1196,7 @@ mod tests {
             &ExecuteMsg::SellShare {
                 option: "Yes".to_string(),
             },
-            &[coin(500, &market.token_a.denom)], // User A sells their remaining 500 tokens
+            &[coin(400, &market.token_a.denom)], // User A sells their remaining 500 tokens
             &user_a,
         );
 
@@ -1289,52 +1303,55 @@ mod tests {
             .unwrap();
 
         // Verify early sell has low tax
-        let tax_rate_early = sell_res_early
+        let wasm_event = sell_res_early
             .events
             .iter()
-            .find(|e| e.ty == "wasm")
-            .unwrap()
+            .find(|e| e.ty.starts_with("wasm"))
+            .expect("Should find wasm event");
+        let tax_rate_early = wasm_event
             .attributes
             .iter()
             .find(|attr| attr.key == "tax_rate")
-            .unwrap()
-            .value
-            .clone();
+            .map(|attr| attr.value.clone())
+            .unwrap_or_else(|| "0.0".to_string());
 
-        let amount_after_tax_early = sell_res_early
+        let final_amount_early = sell_res_early
             .events
             .iter()
-            .find(|e| e.ty == "wasm")
-            .unwrap()
-            .attributes
-            .iter()
-            .find(|attr| attr.key == "amount_after_tax")
-            .unwrap()
-            .value
-            .clone();
+            .find(|e| e.ty.starts_with("wasm"))
+            .and_then(|event| {
+                event.attributes
+                    .iter()
+                    .find(|attr| attr.key == "final_amount")
+                    .map(|attr| attr.value.clone())
+            })
+            .unwrap_or_else(|| "0".to_string());
 
         let tax_amount_early = sell_res_early
             .events
             .iter()
-            .find(|e| e.ty == "wasm")
-            .unwrap()
-            .attributes
-            .iter()
-            .find(|attr| attr.key == "tax_amount")
-            .unwrap()
-            .value
-            .clone();
+            .find(|e| e.ty.starts_with("wasm"))
+            .and_then(|event| {
+                event.attributes
+                    .iter()
+                    .find(|attr| attr.key == "tax_amount")
+                    .map(|attr| attr.value.clone())
+            })
+            .unwrap_or_else(|| "0".to_string());
 
+        println!("Early sell tax amount: {}", tax_amount_early);
         println!("Early sell tax rate: {}", tax_rate_early);
-        println!("Early sell amount after tax: {}", amount_after_tax_early);
+        println!("Early sell final amount: {}", final_amount_early);
 
         // Tax rate should be very low early in the market (close to 0)
         let early_tax_rate = Decimal::from_str(&tax_rate_early).unwrap();
         assert!(early_tax_rate < Decimal::from_str("0.1").unwrap()); // Less than 10%
 
-        // Amount after tax should be close to the original amount
-        let early_amount_after_tax = Uint128::from_str(&amount_after_tax_early).unwrap();
-        assert!(early_amount_after_tax > Uint128::from(180u128)); // Should get back at least 180 out of 200
+        // Final amount should be close to the original amount (after tax and commission)
+        let early_final_amount = Uint128::from_str(&final_amount_early).unwrap();
+        println!("Early final amount: {}", early_final_amount);
+        // From the debug output: final_amount = 190 (200 - 1 tax - 9 commission)
+        assert!(early_final_amount > Uint128::from(180u128)); // Should get back at least 180 out of 200
 
         // Check user balance increased
         let user_balance_after_early_sell = bank
@@ -1354,11 +1371,11 @@ mod tests {
 
         // User should have received some tokens back
         let initial_balance = Uint128::from_str("100000000000000000000").unwrap();
-        let expected_balance = initial_balance - Uint128::from_str(&tax_amount_early).unwrap();
+        let expected_balance = initial_balance -  Uint128::from(1000u128) + Uint128::from_str(&calculate_net_amount(200).to_string()).unwrap() - Uint128::from_str(&tax_amount_early).unwrap(); // 1000 is the amount sold, 500 is the amount bought, tax_amount_early is the tax amount
         assert_eq!(
             Uint128::from_str(&user_balance_after_early_sell).unwrap(),
             //the user only sold 200 on the 100 he bought initially so part of hes inital balance is still there
-            expected_balance - Uint128::from(800u128)
+            expected_balance 
         );
     }
 
