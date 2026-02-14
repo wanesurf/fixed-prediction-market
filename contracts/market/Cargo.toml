@@ -40,3 +40,7 @@ chrono = "0.4"
 cw-multi-test = "2.0.0"
 coreum-test-tube = { workspace = true }
 registry = { workspace = true, features = ["library"] }
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+signature = { version = "2.2.0", features = ["rand_core"] }
+rand = "0.9.2"
+hex = "0.4.3"

@@ -1,11 +1,57 @@
+mod helpers {
+    pub mod keys {
+        use clp_feed_interface::msg::PriceSubmission;
+        use ed25519_dalek::{Signature, SigningKey};
+        use signature::SignerMut;
+
+        #[derive(Clone)]
+        pub struct ValidatorKey {
+            pub signing_key: SigningKey,
+            pub public_key: String,
+            pub id: String,
+        }
+
+        impl ValidatorKey {
+            pub fn sign_price_submission(&mut self, validator_id: &str, asset: &str, price: &str, timestamp: u64, sources: &[String]) -> Result<String, signature::Error> {
+                let tx = format!(
+                    "{}:{}:{}:{}:{}",
+                    validator_id, asset, price, timestamp, sources.join(",")
+                );
+                let signature = self.signing_key.sign(tx.as_bytes());
+                Ok(hex::encode(signature.to_bytes()))
+            }
+        }
+
+        pub fn signing_key_from_seed(seed: &str, id: &str) -> ValidatorKey {
+            let key_bytes = hex::decode(seed)
+                .expect("Invalid private key: must be a valid hex string");
+                
+            let signing_key = SigningKey::from_bytes(
+                &key_bytes.as_slice().try_into()
+                    .expect("Invalid private key: failed to convert to signing key")
+            );
+
+            let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+
+            ValidatorKey {
+                signing_key,
+                public_key,
+                id: id.to_string(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
     use chrono::Utc;
+    use clp_feed_interface::msg::{AggregatedPrice, AssetInfo, PriceSubmission};
     use coreum_test_tube::{Account, Bank, CoreumTestApp, Module, SigningAccount, Wasm};
     use coreum_wasm_sdk::types::cosmos::bank::v1beta1::{MsgSend, QueryBalanceRequest};
 
+    use cosmwasm_schema::cw_serde;
     use cosmwasm_std::{coin, Addr, Decimal, Timestamp, Uint128};
     use market::msg::{
         AllSharesResponse, ExecuteMsg, MarketResponse, MarketStatsResponse, MarketType, OddsResponse, QueryMsg, SimulateSellResponse, TaxRateResponse, TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse, UserWinningsResponse
@@ -16,6 +62,8 @@ mod tests {
         QueryMsg as RegistryQueryMsg,
     };
     use registry::state::MarketInfo;
+    
+    use super::helpers::keys::signing_key_from_seed;
 
     const FEE_DENOM: &str = "ucore";
     const BUY_TOKEN: &str = "uusdc";
@@ -43,6 +91,7 @@ mod tests {
     ) -> (String, String) {
         let market_wasm_byte_code = std::fs::read("../../artifacts/market.wasm").unwrap();
         let registry_wasm_byte_code = std::fs::read("../../artifacts/registry.wasm").unwrap();
+        let clp_feed_wasm_byte_code = std::fs::read("../../artifacts/clp_feed.wasm").unwrap();
 
         let market_code_id = wasm
             .store_code(&market_wasm_byte_code, None, admin)
@@ -56,12 +105,107 @@ mod tests {
             .data
             .code_id;
 
+        let clp_feed_code_id = wasm
+            .store_code(&clp_feed_wasm_byte_code, None, admin)
+            .unwrap()
+            .data
+            .code_id;
+
+        #[cw_serde]
+
+        pub struct ClpFeedInstantiateMsg {
+            pub admin: String,
+            pub validators: Vec<(String, String)>, // (validator_id, public_key_hex)
+            pub operators: Vec<String>,
+            pub min_signatures: Option<u32>,
+            pub max_price_age: Option<u64>,
+            pub assets: Vec<AssetInfo>,
+        }
+
+
+    let validator1_key = signing_key_from_seed("0000000000000000000000000000000000000000000000000000000000000001", "validator_1");
+    let validator2_key = signing_key_from_seed("0000000000000000000000000000000000000000000000000000000000000002", "validator_2");
+
+
+    // Instantiate feed
+    let feed_addr = wasm
+        .instantiate(
+            clp_feed_code_id,
+            &ClpFeedInstantiateMsg {
+                admin: admin.address().to_string(),
+                validators: vec![
+                    ("validator_1".to_string(), validator1_key.clone().public_key),
+                    ("validator_2".to_string(), validator2_key.clone().public_key),
+                ],
+                operators: vec![admin.address().to_string()],
+                min_signatures: Some(1),
+                max_price_age: Some(300),
+                assets: vec![
+                    AssetInfo {
+                        name: "CORE".to_string(),
+                        denom: "ucore".to_string(),
+                        decimals: 6,
+                    },
+                ],
+            },
+            Some(&admin.address()),
+            Some("clp-feed"),
+            &[],
+            admin,
+        )
+        .unwrap()
+        .data
+        .address;
+
+          //set price in clp_feed contract 
+
+    wasm.execute(
+        &feed_addr,
+        &clp_feed_interface::msg::ExecuteMsg::SubmitPrice {
+            aggregated_price: AggregatedPrice {
+                asset: "CORE".to_string(),
+                price: "1.0".to_string(),
+                timestamp: get_start_time(),
+                deviation: None,
+                submissions: vec![],
+                feed_block_height: 0, //TODO: get from block height
+                chain_block_height: None, //TODO: get from block height
+            },
+            validator_submissions: vec![validator1_key.clone(), validator2_key.clone()].iter_mut().map(|validator_key| {
+                let asset = "CORE";
+                let price = "1.0";
+                let timestamp = get_start_time().seconds();
+                let sources = vec![];
+
+                let signature = validator_key.sign_price_submission(
+                    &validator_key.id.clone(),
+                    asset,
+                    price,
+                    timestamp,
+                    &sources
+                ).unwrap();
+
+                PriceSubmission {
+                    validator_id: validator_key.id.clone(),
+                    asset: asset.to_string(),
+                    price: price.to_string(),
+                    timestamp,
+                    sources,
+                    signature,
+                }
+            }).collect(),
+        },
+        &[],
+        admin,
+    ).unwrap();
+
+
         // Instantiate registry
         let registry_address = wasm
             .instantiate(
                 registry_code_id,
                 &RegistryInstantiateMsg {
-                    oracle: oracle.clone(),
+                    oracle: Addr::unchecked(feed_addr.clone()),
                     commission_rate: Uint128::from(COMMISSION_RATE_BPS), // 5% in BPS
                     market_code_id,
                 },
@@ -90,10 +234,10 @@ mod tests {
                     description: "Test prediction market for integration testing".to_string(),
                     title: "Test Market".to_string(),
                     resolution_source: "https://example.com/resolution".to_string(),
-                    oracle: Addr::unchecked(clp_feed_address_TODO),
+                    oracle: Addr::unchecked(feed_addr.clone()),
                     asset_to_track: "CORE".to_string(),
                     market_type: MarketType::UpDown,
-                    target_price: Decimal::from_str("1000000000000000000").unwrap(),
+                    target_price: Decimal::from_str("1.5").unwrap(), // Target price higher than initial price
                 },
                 &[coin(20_000_000, FEE_DENOM)], // Required payment for market creation
                 admin,
@@ -129,6 +273,9 @@ mod tests {
             .unwrap();
 
         let market_address_from_registry = market_info.contract_address;
+
+  
+
 
         println!(
             "Market address from registry: {}",
