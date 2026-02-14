@@ -170,7 +170,7 @@ pub fn instantiate(
 
     Ok(Response::new()
         .add_event(
-            Event::new("cc_create_market")
+            Event::new("cc_prediction_market_create_market")
                 .add_attribute("market_id", msg.id)
                 .add_attribute("admin", msg.admin)
                 .add_attribute("commission_rate", msg.commission_rate.to_string())
@@ -681,7 +681,28 @@ pub mod query {
         let config = CONFIG.load(deps.storage)?;
         let (total_a, total_b) = market_state.total_stakes(&config);
 
+        let options = vec![
+            crate::msg::OptionShares {
+                option: config.pairs[0].text.clone(),
+                token_denom: config.pairs[0].associated_token_denom.clone(),
+                total_staked: Coin {
+                    denom: config.buy_token.clone(),
+                    amount: total_a.to_string(),
+                },
+            },
+            crate::msg::OptionShares {
+                option: config.pairs[1].text.clone(),
+                token_denom: config.pairs[1].associated_token_denom.clone(),
+                total_staked: Coin {
+                    denom: config.buy_token.clone(),
+                    amount: total_b.to_string(),
+                },
+            },
+        ];
+
         Ok(TotalSharesPerOptionResponse {
+            options,
+            // Keep legacy fields for backward compatibility
             option_a: config.pairs[0].clone(),
             amount_a: Coin {
                 denom: config.buy_token.clone(),
@@ -722,6 +743,22 @@ pub mod query {
         let config = CONFIG.load(deps.storage)?;
         let market_state = MARKET_STATE.load(deps.storage)?;
         let (total_a, total_b) = market_state.total_stakes(&config);
+        let (odds_a, odds_b) = market_state.calculate_odds(&config);
+
+        let options_with_odds = vec![
+            crate::msg::OptionWithOdds {
+                option: config.pairs[0].text.clone(),
+                odds: odds_a.to_string(),
+                token_denom: config.pairs[0].associated_token_denom.clone(),
+                total_staked: total_a.to_string(),
+            },
+            crate::msg::OptionWithOdds {
+                option: config.pairs[1].text.clone(),
+                odds: odds_b.to_string(),
+                token_denom: config.pairs[1].associated_token_denom.clone(),
+                total_staked: total_b.to_string(),
+            },
+        ];
 
         Ok(MarketResponse {
             id: config.id,
@@ -744,6 +781,7 @@ pub mod query {
             end_time: config.end_time,
             start_time: config.start_time,
             resolution_source: config.resolution_source,
+            options_with_odds,
         })
     }
     pub fn query_shares(
@@ -780,9 +818,22 @@ pub mod query {
 
         let (odds_a, odds_b) = market_state.calculate_odds(&config);
 
+        let options_odds = vec![
+            crate::msg::OptionOdds {
+                option: config.pairs[0].text.clone(),
+                odds: odds_a,
+            },
+            crate::msg::OptionOdds {
+                option: config.pairs[1].text.clone(),
+                odds: odds_b,
+            },
+        ];
+
         Ok(MarketStatsResponse {
             total_value: market_state.total_value,
             num_bettors: market_state.num_bettors,
+            options_odds,
+            // Keep legacy fields for backward compatibility
             odds_a,
             odds_b,
         })
@@ -799,7 +850,20 @@ pub mod query {
         let (winnings_a, winnings_b) =
             market_state.calculate_potential_winnings(deps.storage, &user, &config)?;
 
+        let options = vec![
+            crate::msg::OptionPotentialWinning {
+                option: config.pairs[0].text.clone(),
+                potential_winnings: winnings_a.clone(),
+            },
+            crate::msg::OptionPotentialWinning {
+                option: config.pairs[1].text.clone(),
+                potential_winnings: winnings_b.clone(),
+            },
+        ];
+
         Ok(UserPotentialWinningsResponse {
+            options,
+            // Keep legacy fields for backward compatibility
             potential_win_a: winnings_a,
             potential_win_b: winnings_b,
         })

@@ -87,6 +87,14 @@ pub enum QueryMsg {
 // We define a custom struct for each query response
 
 #[cw_serde]
+pub struct OptionWithOdds {
+    pub option: String,
+    pub odds: String,
+    pub token_denom: String,
+    pub total_staked: String,
+}
+
+#[cw_serde]
 pub struct MarketResponse {
     pub id: String,
     pub options: Vec<String>,
@@ -102,6 +110,7 @@ pub struct MarketResponse {
     pub end_time: Timestamp,
     pub start_time: Timestamp,
     pub resolution_source: String,
+    pub options_with_odds: Vec<OptionWithOdds>,
     // pub liquidity: String
 }
 
@@ -122,7 +131,16 @@ pub struct TotalValueResponse {
 }
 
 #[cw_serde]
+pub struct OptionShares {
+    pub option: String,
+    pub token_denom: String,
+    pub total_staked: Coin,
+}
+
+#[cw_serde]
 pub struct TotalSharesPerOptionResponse {
+    pub options: Vec<OptionShares>,
+    // Legacy fields for backward compatibility
     pub option_a: MarketOption,
     pub amount_a: Coin,
     pub option_b: MarketOption,
@@ -144,11 +162,21 @@ pub struct AllSharesResponse {
 pub struct MarketStatsResponse {
     pub total_value: Coin,
     pub num_bettors: u64,
+    pub options_odds: Vec<OptionOdds>,
+    // Legacy fields for backward compatibility
     pub odds_a: Decimal,
     pub odds_b: Decimal,
 }
 #[cw_serde]
+pub struct OptionPotentialWinning {
+    pub option: String,
+    pub potential_winnings: Coin,
+}
+
+#[cw_serde]
 pub struct UserPotentialWinningsResponse {
+    pub options: Vec<OptionPotentialWinning>,
+    // Legacy fields for backward compatibility
     pub potential_win_a: Coin,
     pub potential_win_b: Coin,
 }
