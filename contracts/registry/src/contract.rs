@@ -56,6 +56,9 @@ pub fn execute(
             start_time,
             end_time,
             resolution_source,
+            asset_to_track,
+            market_type,
+            target_price,
             oracle,
         } => execute::execute_create_market(
             deps,
@@ -70,6 +73,9 @@ pub fn execute(
             start_time,
             end_time,
             resolution_source,
+            asset_to_track,
+            market_type,
+            target_price,
             oracle,
         ),
     }

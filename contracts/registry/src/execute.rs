@@ -6,7 +6,7 @@ use cosmwasm_std::{
 use crate::error::ContractError;
 use crate::state::{MarketInfo, MarketOption, MarketStatus, CONFIG, MARKETS};
 
-use market::msg::InstantiateMsg as MarketInstantiateMsg;
+use market::msg::{InstantiateMsg as MarketInstantiateMsg, MarketType};
 
 use utils::{address::derive_address2, hashing::hash_data, validation::validate_funds};
 
@@ -23,6 +23,9 @@ pub fn execute_create_market(
     start_time: Timestamp,
     end_time: Timestamp,
     resolution_source: String,
+    asset_to_track: String,
+    market_type: MarketType,
+    target_price: Decimal,
     oracle: Addr,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
@@ -79,6 +82,9 @@ pub fn execute_create_market(
         title: title.clone(),
         start_time: start_time.clone(),
         resolution_source: resolution_source.clone(),
+        asset_to_track: asset_to_track.clone(),
+        market_type: market_type.clone(),
+        target_price: target_price.clone(),
         commission_rate: config.commission_rate,
         oracle: oracle.clone(),
     };

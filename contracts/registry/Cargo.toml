@@ -33,6 +33,7 @@ cw-utils = { version = "2.0.0" }
 market = { workspace = true, features = ["library"] }
 utils = { workspace = true }
 sha2 = { workspace = true }
+clp-feed-interface = { workspace = true }
 
 [dev-dependencies]
 cw-multi-test = "2.0.0"

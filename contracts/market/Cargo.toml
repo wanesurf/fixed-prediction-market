@@ -33,6 +33,7 @@ cw-ownable = { workspace = true }
 cw-utils = { workspace = true }
 utils = { workspace = true }
 sha2 = { workspace = true }
+clp-feed-interface = { workspace = true }
 
 [dev-dependencies]
 chrono = "0.4"

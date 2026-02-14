@@ -4,6 +4,8 @@ use cosmwasm_std::{Addr, Decimal, StdResult, Storage, Timestamp, Uint128};
 use cw_storage_plus::{Item, Map};
 use std::str::FromStr;
 
+use crate::msg::MarketType;
+
 #[cw_serde]
 pub struct State {
     pub admin: Addr,
@@ -46,6 +48,10 @@ pub struct Config {
     pub end_time: Timestamp,      // End time of the market
     pub oracle: Addr,
     pub resolution_source: String, // Source of the resolution --> Feed contract address
+    pub asset_to_track: String, //This is the asset name "CORE", "BTC", "ETH", etc. not the DENOM
+    pub market_type: MarketType,
+    pub target_price: Decimal,
+    pub initial_price: Decimal, // Initial price at market creation
 }
 
 #[cw_serde]

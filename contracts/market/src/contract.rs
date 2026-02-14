@@ -3,7 +3,7 @@ use std::str::FromStr;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_json_binary, Binary, Deps, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult,
+    Binary, Decimal, Deps, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult, to_json_binary
 };
 use cw2::set_contract_version;
 
@@ -23,6 +23,9 @@ use coreum_wasm_sdk::types::cosmos::bank::v1beta1::MsgSend;
 use coreum_wasm_sdk::types::cosmos::base::v1beta1::Coin;
 
 use cw_utils::must_pay;
+
+use clp_feed_interface::ClpFeedQuerier;
+
 
 // Contract name and version for migration
 const CONTRACT_NAME: &str = "crates.io:cruise-control-prediction-market";
@@ -44,6 +47,18 @@ pub fn instantiate(
             "Markets must have exactly two options",
         )));
     }
+
+    // Get initial price from clp_feed contract
+
+    let oracle = ClpFeedQuerier::new(&deps.querier, msg.oracle.clone());
+    let initial_price = oracle.query_price(msg.asset_to_track.clone())?;
+    if initial_price.price.is_none() {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Failed to get initial price from clp_feed contract",
+        )));
+    }
+
+
 
     let subunit_token_a = format!(
         "truth{}_{}",
@@ -143,6 +158,11 @@ pub fn instantiate(
         title: msg.title.clone(),
         oracle: msg.oracle.clone(),
         resolution_source: msg.resolution_source.clone(),
+        asset_to_track: msg.asset_to_track.clone(),
+        market_type: msg.market_type.clone(),
+        target_price: msg.target_price.clone(),
+        //TODO: check this
+        initial_price: Decimal::from_str(&initial_price.price.unwrap().price).unwrap(),
     };
 
     MARKET_STATE.save(deps.storage, &market_state)?;
@@ -161,7 +181,11 @@ pub fn instantiate(
                 .add_attribute("start_time", msg.start_time.to_string())
                 .add_attribute("end_time", msg.end_time.to_string())
                 .add_attribute("resolution_source", msg.resolution_source)
-                .add_attribute("oracle", msg.oracle),
+                .add_attribute("oracle", msg.oracle)
+                .add_attribute("asset_to_track", msg.asset_to_track)
+                .add_attribute("market_type", msg.market_type.to_string())
+                .add_attribute("target_price", msg.target_price.to_string())
+                .add_attribute("initial_price", market_config.initial_price.to_string())
         )
         .add_message(CosmosMsg::Any(issue_token_a.to_any()))
         .add_message(CosmosMsg::Any(issue_token_b.to_any())))

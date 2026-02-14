@@ -21,7 +21,15 @@ pub struct InstantiateMsg {
     pub banner_url: String,
     pub description: String,
     pub title: String,
-    pub resolution_source: String,
+    pub resolution_source: String, // NOT FOR NOW 
+    // The denom we're tracking on the clp_feed contract
+    pub asset_to_track: String, //This is the asset name "CORE", "BTC", "ETH", etc. not the DENOM
+    //"up_down" -->  price to beat + duration. example: "Bitcoin Up or Down - 5 min"
+    //"price_at" --> "Will Bitcoin be higher then 80k on the 15th of March 2026"
+    pub market_type: MarketType,
+    // If we reach this price market resolve to UP or YES
+    pub target_price: Decimal,
+  
     pub oracle: Addr,
 }
 
@@ -160,4 +168,18 @@ pub struct SimulateSellResponse {
     pub tax_rate: Decimal,         // Tax rate applied
     pub tax_amount: String,        // Amount taken as tax
     pub amount_after_tax: String,  // Amount user would receive
+}
+#[cw_serde]
+pub enum MarketType {
+    UpDown,
+    PriceAt,
+}
+
+impl std::fmt::Display for MarketType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MarketType::UpDown => write!(f, "UpDown"),
+            MarketType::PriceAt => write!(f, "PriceAt"),
+        }
+    }
 }

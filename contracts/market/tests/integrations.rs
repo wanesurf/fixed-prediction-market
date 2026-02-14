@@ -8,9 +8,7 @@ mod tests {
 
     use cosmwasm_std::{coin, Addr, Decimal, Timestamp, Uint128};
     use market::msg::{
-        AllSharesResponse, ExecuteMsg, MarketResponse, MarketStatsResponse, OddsResponse, QueryMsg,
-        SimulateSellResponse, TaxRateResponse, TotalSharesPerOptionResponse, TotalValueResponse,
-        UserPotentialWinningsResponse, UserWinningsResponse,
+        AllSharesResponse, ExecuteMsg, MarketResponse, MarketStatsResponse, MarketType, OddsResponse, QueryMsg, SimulateSellResponse, TaxRateResponse, TotalSharesPerOptionResponse, TotalValueResponse, UserPotentialWinningsResponse, UserWinningsResponse
     };
     use market::state::MarketStatus;
     use registry::msg::{
@@ -42,7 +40,6 @@ mod tests {
     fn setup_registry_and_market(
         wasm: &Wasm<'_, CoreumTestApp>,
         admin: &SigningAccount,
-        oracle: &Addr,
     ) -> (String, String) {
         let market_wasm_byte_code = std::fs::read("../../artifacts/market.wasm").unwrap();
         let registry_wasm_byte_code = std::fs::read("../../artifacts/registry.wasm").unwrap();
@@ -77,6 +74,8 @@ mod tests {
             .data
             .address;
 
+        //TODO instantiate clp_feed contract
+
         // Create market through registry
         let create_market_res = wasm
             .execute(
@@ -91,7 +90,10 @@ mod tests {
                     description: "Test prediction market for integration testing".to_string(),
                     title: "Test Market".to_string(),
                     resolution_source: "https://example.com/resolution".to_string(),
-                    oracle: oracle.clone(),
+                    oracle: Addr::unchecked(clp_feed_address_TODO),
+                    asset_to_track: "CORE".to_string(),
+                    market_type: MarketType::UpDown,
+                    target_price: Decimal::from_str("1000000000000000000").unwrap(),
                 },
                 &[coin(20_000_000, FEE_DENOM)], // Required payment for market creation
                 admin,
@@ -149,7 +151,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         println!("Registry address: {}", registry_address);
         println!("Market address: {}", market_address);
@@ -208,7 +210,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
         let buy_res = wasm
@@ -271,7 +273,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -370,7 +372,7 @@ mod tests {
         let bank = Bank::new(&app);
 
         let (registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Users buy shares
         let user1_betting_amount = 1000;
@@ -556,7 +558,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -628,7 +630,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Try to resolve market as non-admin user (should fail)
         let result = wasm.execute(
@@ -673,7 +675,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
         wasm.execute(
@@ -751,7 +753,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Resolve the market first
         wasm.execute(
@@ -803,7 +805,7 @@ mod tests {
         let bank = Bank::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
         wasm.execute(
@@ -950,7 +952,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
         wasm.execute(
@@ -1012,7 +1014,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Get market info to find token denom (needed for attempting to sell)
         let market: MarketResponse = wasm
@@ -1069,7 +1071,7 @@ mod tests {
         let bank = Bank::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User A buys shares for "Yes"
         wasm.execute(
@@ -1266,7 +1268,7 @@ mod tests {
         let bank = Bank::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares
         wasm.execute(
@@ -1400,7 +1402,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares
         wasm.execute(
@@ -1466,7 +1468,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Query tax rate at market start (should be close to 0%)
         let tax_rate: TaxRateResponse = wasm
@@ -1529,7 +1531,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
         let (_registry_address, market_address) =
-            setup_registry_and_market(&wasm, &admin, &Addr::unchecked(oracle.address()));
+            setup_registry_and_market(&wasm, &admin);
 
         // Simulate sell at market start (should have 0% tax)
         let simulate: SimulateSellResponse = wasm

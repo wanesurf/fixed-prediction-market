@@ -1,6 +1,7 @@
 use crate::state::{Config, MarketInfo};
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Timestamp, Uint128, Decimal};
+use market::msg::MarketType;
 
 #[cw_serde]
 pub struct MigrateMsg {}
@@ -24,6 +25,9 @@ pub enum ExecuteMsg {
         description: String,
         title: String,
         resolution_source: String,
+        asset_to_track: String,
+        market_type: MarketType,
+        target_price: Decimal,
         oracle: Addr,
     },
 }
