@@ -42,10 +42,8 @@ pub fn instantiate(
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // Validate that options match the market type
-    if let Err(validation_error) = msg.market_type.validate_options(&msg.options) {
-        return Err(ContractError::Std(StdError::generic_err(validation_error)));
-    }
+    // Get the options for this market type
+    let options = msg.market_type.get_options();
 
     // Get initial price from clp_feed contract
 
@@ -61,13 +59,13 @@ pub fn instantiate(
 
     let subunit_token_a = format!(
         "truth{}_{}",
-        msg.options[0].to_lowercase().replace(" ", "_"),
+        options[0].to_lowercase().replace(" ", "_"),
         msg.id.to_lowercase().replace(" ", "_")
     );
 
     let symbol_token_a = format!(
         "TM{}{}", // TM prefix for "Truth Markets"
-        msg.options[0].replace(" ", ""),
+        options[0].replace(" ", ""),
         msg.id.replace(" ", "")
     );
 
@@ -78,7 +76,7 @@ pub fn instantiate(
         subunit: subunit_token_a.clone(),
         precision: 6,
         initial_amount: "0".to_string(),
-        description: format!("Token for {} in market {}", msg.options[0], msg.id),
+        description: format!("Token for {} in market {}", options[0], msg.id),
         //Minting & Burning is enabled
         features: vec![0 as i32, 1 as i32],
         burn_rate: "0".to_string(),
@@ -93,13 +91,13 @@ pub fn instantiate(
 
     let subunit_token_b = format!(
         "truth{}_{}",
-        msg.options[1].to_lowercase().replace(" ", "_"),
+        options[1].to_lowercase().replace(" ", "_"),
         msg.id.to_lowercase().replace(" ", "_")
     );
 
     let symbol_token_b = format!(
         "TM{}{}", // TM prefix for "Truth Markets"
-        msg.options[1].replace(" ", ""),
+        options[1].replace(" ", ""),
         msg.id.replace(" ", "")
     );
 
@@ -109,7 +107,7 @@ pub fn instantiate(
         subunit: subunit_token_b.clone(),
         precision: 6,
         initial_amount: "0".to_string(),
-        description: format!("Token for {} in market {}", msg.options[1], msg.id),
+        description: format!("Token for {} in market {}", options[1], msg.id),
         features: vec![0 as i32, 1 as i32],
         burn_rate: "0".to_string(),
         send_commission_rate: "0".to_string(),
@@ -123,12 +121,12 @@ pub fn instantiate(
 
     // Create MarketOption structs with associated token denoms
     let option_a = MarketOption {
-        text: msg.options[0].clone(),
+        text: options[0].clone(),
         associated_token_denom: denom_token_a.clone(),
     };
 
     let option_b = MarketOption {
-        text: msg.options[1].clone(),
+        text: options[1].clone(),
         associated_token_denom: denom_token_b.clone(),
     };
 
@@ -322,7 +320,7 @@ pub fn sell_share(
     Ok(response
         .add_event(
             Event::new("cc_prediction_market_sell_share")
-                .add_attribute("market_id", config.id)
+                .add_attribute("market_id", config.clone().id)
                 .add_attribute("option", market_option.text)
                 .add_attribute("tokens_sent", amount_sent.to_string())
                 .add_attribute("amount_after_tax", amount_after_tax.to_string())
@@ -664,20 +662,9 @@ pub mod query {
     pub fn query_odds(deps: Deps) -> StdResult<OddsResponse> {
         let market_state = MARKET_STATE.load(deps.storage)?;
         let config = CONFIG.load(deps.storage)?;
-        let (odds_a, odds_b) = market_state.calculate_odds(&config);
 
-        use crate::msg::OptionOdds;
         Ok(OddsResponse {
-            odds: vec![
-                OptionOdds {
-                    option: config.pairs[0].text.clone(),
-                    odds: odds_a,
-                },
-                OptionOdds {
-                    option: config.pairs[1].text.clone(),
-                    odds: odds_b,
-                },
-            ],
+            odds: market_state.create_type_safe_odds(&config),
         })
     }
 

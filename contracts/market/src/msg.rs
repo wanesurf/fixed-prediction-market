@@ -13,7 +13,6 @@ pub struct MigrateMsg {}
 pub struct InstantiateMsg {
     pub id: String,
     pub admin: Addr,
-    pub options: Vec<String>, //outcomes options
     pub start_time: Timestamp,
     pub end_time: Timestamp,
     pub commission_rate: Uint128, // in basis points (BPS), e.g., 500 = 5%
@@ -237,30 +236,12 @@ impl MarketType {
         }
     }
 
-    /// Validates that the provided options match the expected options for this market type
-    pub fn validate_options(&self, options: &[String]) -> Result<(), String> {
-        if options.len() != 2 {
-            return Err("Markets must have exactly two options".to_string());
+    /// Gets the expected options for this market type
+    pub fn get_options(&self) -> Vec<String> {
+        match self {
+            MarketType::UpDown => vec!["Up".to_string(), "Down".to_string()],
+            MarketType::PriceAt => vec!["Yes".to_string(), "No".to_string()],
         }
-
-        let expected_options = match self {
-            MarketType::UpDown => vec!["Up", "Down"],
-            MarketType::PriceAt => vec!["Yes", "No"],
-        };
-
-        let mut provided_options = options.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-        provided_options.sort();
-        let mut expected_sorted = expected_options.clone();
-        expected_sorted.sort();
-
-        if provided_options != expected_sorted {
-            return Err(format!(
-                "Options {:?} do not match expected options {:?} for market type {}",
-                options, expected_options, self
-            ));
-        }
-
-        Ok(())
     }
 
     /// Creates type-safe odds ensuring correct option assignment

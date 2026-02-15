@@ -279,7 +279,6 @@ mod tests {
                 &registry_address,
                 &RegistryExecuteMsg::CreateMarket {
                     id: "test_market_1".to_string(),
-                    options: vec!["Yes".to_string(), "No".to_string()],
                     start_time: get_start_time(),
                     end_time: get_end_time(),
                     buy_token: BUY_TOKEN.to_string(),
