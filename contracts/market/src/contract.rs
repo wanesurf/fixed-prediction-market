@@ -309,11 +309,22 @@ pub fn sell_share(
                 amount: final_amount.to_string(),
             }],
         };
+
+        //send comission to admin
+        let commission_to_admin_msg = MsgSend {
+            from_address: env.contract.address.to_string(),
+            to_address: config.admin.to_string(),
+            amount: vec![Coin {
+                denom: config.buy_token.clone(),
+                amount: commission_amount.to_string(),
+            }],
+        };
+        
         messages.push(CosmosMsg::Any(return_msg.to_any()));
+        messages.push(CosmosMsg::Any(commission_to_admin_msg.to_any()))
     }
 
     let config = CONFIG.load(deps.storage)?;
-    let (odds_a, odds_b) = market_state.calculate_odds(&config);
 
     let response = Response::new();
 
@@ -428,6 +439,17 @@ pub fn buy_share(
         recipient: info.sender.to_string(),
     };
 
+       //send comission to admin
+    let commission_to_admin_msg = MsgSend {
+        from_address: env.contract.address.to_string(),
+        to_address: config.admin.to_string(),
+        amount: vec![Coin {
+            denom: config.buy_token.clone(),
+            amount: commission_amount.to_string(),
+        }],
+    };
+
+
     let response = Response::new();
 
     // Use type-safe odds creation
@@ -451,6 +473,7 @@ pub fn buy_share(
                     cosmwasm_std::to_json_string(&odds).unwrap_or_else(|_| "[]".to_string()),
                 ),
         )
+        .add_message(CosmosMsg::Any(commission_to_admin_msg.to_any()))
         .add_message(CosmosMsg::Any(mint_msg.to_any())))
 }
 
