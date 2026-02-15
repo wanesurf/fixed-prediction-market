@@ -520,10 +520,7 @@ pub fn resolve(
         .find(|p| p.text == winning_option_text)
         .cloned()
         .ok_or_else(|| StdError::generic_err(
-            format!("Could not find option '{}' in market pairs. Available options: {}",
-                winning_option_text,
-                config.pairs.iter().map(|p| &p.text).collect::<Vec<_>>().join(", ")
-            )
+            format!("Could not find option")
         ))?;
 
     // Update the market status with the winning option
