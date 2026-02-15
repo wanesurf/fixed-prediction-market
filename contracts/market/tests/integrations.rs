@@ -69,6 +69,9 @@ mod tests {
     const BUY_TOKEN: &str = "uusdc";
     const COMMISSION_RATE_BPS: u128 = 500; // 5% in basis points
 
+    const TIME_TO_END: u64 = 3600 * 24 * 1;
+
+
     // Helper function to calculate net amount after commission
     fn calculate_net_amount(amount: u128) -> u128 {
         amount - (amount * COMMISSION_RATE_BPS / 10000)
@@ -79,16 +82,66 @@ mod tests {
         Timestamp::from_seconds(Utc::now().timestamp() as u64)
     }
 
+  
     // Helper function to get end time (1 day from now)
     fn get_end_time() -> Timestamp {
         let now = Timestamp::from_seconds(Utc::now().timestamp() as u64);
-        now.plus_seconds(3600 * 24 * 1)
+        now.plus_seconds(TIME_TO_END)
+    }
+
+    fn add_time_to() {
+
+    }
+
+    // Helper function to update price in existing CLP feed
+    fn update_clp_feed_price(wasm: &Wasm<'_, CoreumTestApp>, admin: &SigningAccount, feed_addr: &str, new_price: &str) {
+        let validator1_key = signing_key_from_seed("0000000000000000000000000000000000000000000000000000000000000001", "validator_1");
+        let validator2_key = signing_key_from_seed("0000000000000000000000000000000000000000000000000000000000000002", "validator_2");
+
+        wasm.execute(
+            feed_addr,
+            &clp_feed_interface::msg::ExecuteMsg::SubmitPrice {
+                aggregated_price: AggregatedPrice {
+                    asset: "CORE".to_string(),
+                    price: new_price.to_string(),
+                    timestamp: get_start_time(),
+                    deviation: None,
+                    submissions: vec![],
+                    feed_block_height: 0,
+                    chain_block_height: None,
+                },
+                validator_submissions: vec![validator1_key.clone(), validator2_key.clone()].iter_mut().map(|validator_key| {
+                    let asset = "CORE";
+                    let timestamp = get_start_time().seconds();
+                    let sources = vec![];
+
+                    let signature = validator_key.sign_price_submission(
+                        &validator_key.id.clone(),
+                        asset,
+                        new_price,
+                        timestamp,
+                        &sources
+                    ).unwrap();
+
+                    PriceSubmission {
+                        validator_id: validator_key.id.clone(),
+                        asset: asset.to_string(),
+                        price: new_price.to_string(),
+                        timestamp,
+                        sources,
+                        signature,
+                    }
+                }).collect(),
+            },
+            &[],
+            admin,
+        ).unwrap();
     }
 
     fn setup_registry_and_market(
         wasm: &Wasm<'_, CoreumTestApp>,
         admin: &SigningAccount,
-    ) -> (String, String) {
+    ) -> (String, String, String) {
         let market_wasm_byte_code = std::fs::read("../../artifacts/market.wasm").unwrap();
         let registry_wasm_byte_code = std::fs::read("../../artifacts/registry.wasm").unwrap();
         let clp_feed_wasm_byte_code = std::fs::read("../../artifacts/clp_feed.wasm").unwrap();
@@ -139,7 +192,7 @@ mod tests {
                 ],
                 operators: vec![admin.address().to_string()],
                 min_signatures: Some(1),
-                max_price_age: Some(300),
+                max_price_age: Some(3000000),
                 assets: vec![
                     AssetInfo {
                         name: "CORE".to_string(),
@@ -236,7 +289,7 @@ mod tests {
                     resolution_source: "https://example.com/resolution".to_string(),
                     oracle: Addr::unchecked(feed_addr.clone()),
                     asset_to_track: "CORE".to_string(),
-                    market_type: MarketType::UpDown,
+                    market_type: MarketType::PriceAt,
                     target_price: Decimal::from_str("1.5").unwrap(), // Target price higher than initial price
                 },
                 &[coin(20_000_000, FEE_DENOM)], // Required payment for market creation
@@ -283,7 +336,7 @@ mod tests {
         );
         println!("Market address from events: {}", market_address);
 
-        (registry_address, market_address)
+        (registry_address, market_address, feed_addr)
     }
 
     #[test]
@@ -297,7 +350,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (registry_address, market_address) =
+        let (registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         println!("Registry address: {}", registry_address);
@@ -356,7 +409,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
@@ -419,7 +472,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
@@ -518,7 +571,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
         let bank = Bank::new(&app);
 
-        let (registry_address, market_address) =
+        let (registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // Users buy shares
@@ -557,12 +610,16 @@ mod tests {
             )
             .unwrap();
 
+        update_clp_feed_price(&wasm, &admin, &_feed_addr, "2.0");
+
+
+        app.increase_time(TIME_TO_END);
+        
         // Registry (admin) resolves market to "Yes"
         wasm.execute(
             &market_address,
             &ExecuteMsg::Resolve {
                 market_id: "test_market_1".to_string(),
-                winning_option: "Yes".to_string(),
             },
             &[],
             &admin, // Registry is the admin that can resolve markets
@@ -704,7 +761,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
@@ -776,7 +833,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // Try to resolve market as non-admin user (should fail)
@@ -784,7 +841,6 @@ mod tests {
             &market_address,
             &ExecuteMsg::Resolve {
                 market_id: "test_market_1".to_string(),
-                winning_option: "Yes".to_string(),
             },
             &[],
             &user1, // Non-admin user
@@ -821,7 +877,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys "Yes" shares
@@ -899,15 +955,16 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
+
+        app.increase_time(TIME_TO_END);
 
         // Resolve the market first
         wasm.execute(
             &market_address,
             &ExecuteMsg::Resolve {
                 market_id: "test_market_1".to_string(),
-                winning_option: "Yes".to_string(),
             },
             &[],
             &admin,
@@ -951,7 +1008,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
         let bank = Bank::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
@@ -1098,7 +1155,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares for "Yes"
@@ -1160,7 +1217,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // Get market info to find token denom (needed for attempting to sell)
@@ -1217,7 +1274,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
         let bank = Bank::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User A buys shares for "Yes"
@@ -1414,7 +1471,7 @@ mod tests {
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
         let bank = Bank::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // User1 buys shares
@@ -1548,8 +1605,9 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
+            
 
         // User1 buys shares
         wasm.execute(
@@ -1563,12 +1621,14 @@ mod tests {
         )
         .unwrap();
 
+
+        app.increase_time(TIME_TO_END);
+
         // Resolve the market
         wasm.execute(
             &market_address,
             &ExecuteMsg::Resolve {
                 market_id: "test_market_1".to_string(),
-                winning_option: "Yes".to_string(),
             },
             &[],
             &admin,
@@ -1614,7 +1674,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // Query tax rate at market start (should be close to 0%)
@@ -1677,7 +1737,7 @@ mod tests {
             .unwrap();
         let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
 
-        let (_registry_address, market_address) =
+        let (_registry_address, market_address, _feed_addr) =
             setup_registry_and_market(&wasm, &admin);
 
         // Simulate sell at market start (should have 0% tax)
@@ -1743,4 +1803,231 @@ mod tests {
         let calculated_tax = Uint128::from(1000u128) - amount_after_tax;
         assert_eq!(tax_amount, calculated_tax);
     }
+
+    #[test]
+    fn test_automatic_market_resolution_target_reached() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let user1 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let user2 = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address, feed_addr) =
+            setup_registry_and_market(&wasm, &admin);
+
+        // Users buy shares before resolution
+        // User1 bets on "Yes" (price will reach target)
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "Yes".to_string(),
+            },
+            &[coin(1000, BUY_TOKEN)],
+            &user1,
+        )
+        .unwrap();
+
+        // User2 bets on "No" (price will not reach target)
+        wasm.execute(
+            &market_address,
+            &ExecuteMsg::BuyShare {
+                market_id: "test_market_1".to_string(),
+                option: "No".to_string(),
+            },
+            &[coin(2000, BUY_TOKEN)],
+            &user2,
+        )
+        .unwrap();
+
+        // Advance time to after market end
+        let start_time = get_start_time();
+        let end_time = get_end_time();
+        let market_duration = end_time.seconds() - start_time.seconds();
+        app.increase_time(market_duration + 100); // 100 seconds after market end
+
+        // Update price to 2.0 (higher than target of 1.5) - This should make "Yes" win
+        update_clp_feed_price(&wasm, &admin, &feed_addr, "2.0");
+
+        // Resolve the market (should automatically determine "Yes" wins)
+        let resolve_res = wasm
+            .execute(
+                &market_address,
+                &ExecuteMsg::Resolve {
+                    market_id: "test_market_1".to_string(),
+                },
+                &[],
+                &admin,
+            )
+            .unwrap();
+
+        // Verify resolution event contains correct information
+        let resolve_event = resolve_res
+            .events
+            .iter()
+            .find(|e| e.ty.contains("resolve"))
+            .expect("Should have resolve event");
+
+        let winning_option = resolve_event
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "winning_option")
+            .map(|attr| attr.value.clone())
+            .expect("Should have winning_option attribute");
+
+        let current_price = resolve_event
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "current_price")
+            .map(|attr| attr.value.clone())
+            .expect("Should have current_price attribute");
+
+        let target_price = resolve_event
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "target_price")
+            .map(|attr| attr.value.clone())
+            .expect("Should have target_price attribute");
+
+        assert_eq!(winning_option, "Yes");
+        assert_eq!(current_price, "2");
+        assert_eq!(target_price, "1.5");
+
+        // Verify market status is resolved with correct winner
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        if let MarketStatus::Resolved(winning_option_obj) = market.status {
+            assert_eq!(winning_option_obj.text, "Yes");
+        } else {
+            panic!("Market should be resolved");
+        }
+
+        println!("✅ Market automatically resolved: {} wins with price {} vs target {}",
+                 winning_option, current_price, target_price);
+    }
+
+    #[test]
+    fn test_automatic_market_resolution_target_not_reached() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address, feed_addr) =
+            setup_registry_and_market(&wasm, &admin);
+
+        // Advance time to after market end
+        let start_time = get_start_time();
+        let end_time = get_end_time();
+        let market_duration = end_time.seconds() - start_time.seconds();
+        app.increase_time(market_duration + 100);
+
+        // Update price to 1.2 (lower than target of 1.5) - This should make "No" win
+        update_clp_feed_price(&wasm, &admin, &feed_addr, "1.2");
+
+        // Resolve the market
+        let resolve_res = wasm
+            .execute(
+                &market_address,
+                &ExecuteMsg::Resolve {
+                    market_id: "test_market_1".to_string(),
+                },
+                &[],
+                &admin,
+            )
+            .unwrap();
+
+        // Verify "No" wins when target is not reached
+        let resolve_event = resolve_res
+            .events
+            .iter()
+            .find(|e| e.ty.contains("resolve"))
+            .expect("Should have resolve event");
+
+        let winning_option = resolve_event
+            .attributes
+            .iter()
+            .find(|attr| attr.key == "winning_option")
+            .map(|attr| attr.value.clone())
+            .expect("Should have winning_option attribute");
+
+        assert_eq!(winning_option, "No");
+
+        // Verify market status
+        let market: MarketResponse = wasm
+            .query(
+                &market_address,
+                &QueryMsg::GetMarket {
+                    id: "test_market_1".to_string(),
+                },
+            )
+            .unwrap();
+
+        if let MarketStatus::Resolved(winning_option_obj) = market.status {
+            assert_eq!(winning_option_obj.text, "No");
+        } else {
+            panic!("Market should be resolved");
+        }
+
+        println!("✅ Market automatically resolved: {} wins (target not reached)", winning_option);
+    }
+
+    #[test]
+    fn test_resolve_before_market_end_fails() {
+        let app = CoreumTestApp::new();
+        let admin = app
+            .init_account(&[
+                coin(100_000_000_000_000_000_000u128, FEE_DENOM),
+                coin(100_000_000_000_000_000_000u128, BUY_TOKEN),
+            ])
+            .unwrap();
+        let wasm: Wasm<'_, CoreumTestApp> = Wasm::new(&app);
+
+        let (_registry_address, market_address, _feed_addr) =
+            setup_registry_and_market(&wasm, &admin);
+
+        // Try to resolve market before it ends (should fail)
+        let result = wasm.execute(
+            &market_address,
+            &ExecuteMsg::Resolve {
+                market_id: "test_market_1".to_string(),
+            },
+            &[],
+            &admin,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Market has not ended yet"));
+
+        println!("✅ Correctly prevented early resolution: {}", error_msg);
+    }
+
+    // Helper function to setup clp feed with specific price
 }

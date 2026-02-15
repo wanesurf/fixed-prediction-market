@@ -475,6 +475,9 @@ pub fn resolve(
     info: MessageInfo,
     _market_id: String,
 ) -> Result<Response, ContractError> {
+
+    //TODO: check how can we get the price at resolve time!
+    //Right now we get the latest price wihcih might be different then the price at end_time!
     let config = CONFIG.load(deps.storage)?;
     let mut market_state = MARKET_STATE.load(deps.storage)?;
 
