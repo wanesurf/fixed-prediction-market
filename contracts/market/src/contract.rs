@@ -42,10 +42,9 @@ pub fn instantiate(
 
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    if msg.options.len() != 2 {
-        return Err(ContractError::Std(StdError::generic_err(
-            "Markets must have exactly two options",
-        )));
+    // Validate that options match the market type
+    if let Err(validation_error) = msg.market_type.validate_options(&msg.options) {
+        return Err(ContractError::Std(StdError::generic_err(validation_error)));
     }
 
     // Get initial price from clp_feed contract
@@ -202,8 +201,7 @@ pub fn execute(
         ExecuteMsg::BuyShare { market_id, option } => buy_share(deps, env, info, market_id, option),
         ExecuteMsg::Resolve {
             market_id,
-            winning_option,
-        } => resolve(deps, env, info, market_id, winning_option),
+        } => resolve(deps, env, info, market_id),
         ExecuteMsg::Withdraw { market_id } => withdraw(deps, env, info, market_id),
         ExecuteMsg::SellShare { option } => sell_share(deps, env, info, option),
     }
@@ -473,10 +471,9 @@ pub fn buy_share(
 
 pub fn resolve(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     _market_id: String,
-    winning_option: String,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     let mut market_state = MARKET_STATE.load(deps.storage)?;
@@ -489,11 +486,11 @@ pub fn resolve(
     }
 
     // Check if the market has ended
-    // if env.block.time < market.end_time {
-    //     return Err(ContractError::Std(StdError::generic_err(
-    //         "Market has not ended yet",
-    //     )));
-    // }
+    if env.block.time < config.end_time {
+        return Err(ContractError::Std(StdError::generic_err(
+            "Market has not ended yet",
+        )));
+    }
 
     // Check if the market is already resolved
     if matches!(market_state.status, MarketStatus::Resolved(_)) {
@@ -502,12 +499,32 @@ pub fn resolve(
         )));
     }
 
+    // Get current price from oracle
+    let oracle = ClpFeedQuerier::new(&deps.querier, config.oracle.clone());
+    let current_price_response = oracle.query_price(config.asset_to_track.clone())?;
+
+    let current_price = match current_price_response.price {
+        Some(price_info) => Decimal::from_str(&price_info.price)
+            .map_err(|_| StdError::generic_err("Invalid price format from oracle"))?,
+        None => return Err(ContractError::Std(StdError::generic_err(
+            "No price available from oracle"
+        ))),
+    };
+
+    // Determine winning option based on market type and price comparison
+    let winning_option_text = config.market_type.determine_winner(current_price, config.target_price);
+
     let winning_option_obj = config
         .pairs
         .iter()
-        .find(|p| p.text == winning_option)
+        .find(|p| p.text == winning_option_text)
         .cloned()
-        .ok_or_else(|| StdError::generic_err("Invalid winning option"))?;
+        .ok_or_else(|| StdError::generic_err(
+            format!("Could not find option '{}' in market pairs. Available options: {}",
+                winning_option_text,
+                config.pairs.iter().map(|p| &p.text).collect::<Vec<_>>().join(", ")
+            )
+        ))?;
 
     // Update the market status with the winning option
     market_state.status = MarketStatus::Resolved(winning_option_obj);
@@ -518,7 +535,10 @@ pub fn resolve(
     Ok(Response::new().add_event(
         Event::new("cc_prediction_market_resolve")
             .add_attribute("market_id", config.id)
-            .add_attribute("winning_option", winning_option)
+            .add_attribute("winning_option", winning_option_text)
+            .add_attribute("current_price", current_price.to_string())
+            .add_attribute("target_price", config.target_price.to_string())
+            .add_attribute("initial_price", config.initial_price.to_string())
             .add_attribute("user", info.sender.to_string())
             .add_attribute("total_value", market_state.total_value.amount.to_string()),
     ))

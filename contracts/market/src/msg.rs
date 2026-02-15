@@ -41,7 +41,6 @@ pub enum ExecuteMsg {
     },
     Resolve {
         market_id: String,
-        winning_option: String,
     },
     Withdraw {
         market_id: String,
@@ -209,5 +208,58 @@ impl std::fmt::Display for MarketType {
             MarketType::UpDown => write!(f, "UpDown"),
             MarketType::PriceAt => write!(f, "PriceAt"),
         }
+    }
+}
+
+impl MarketType {
+    /// Returns the option text that wins when the condition is met (price target reached)
+    pub fn get_winning_option_when_target_reached(&self) -> &'static str {
+        match self {
+            MarketType::UpDown => "Up",
+            MarketType::PriceAt => "Yes",
+        }
+    }
+
+    /// Returns the option text that wins when the condition is not met (price target not reached)
+    pub fn get_winning_option_when_target_not_reached(&self) -> &'static str {
+        match self {
+            MarketType::UpDown => "Down",
+            MarketType::PriceAt => "No",
+        }
+    }
+
+    /// Determines the winning option based on whether target price was reached
+    pub fn determine_winner(&self, current_price: cosmwasm_std::Decimal, target_price: cosmwasm_std::Decimal) -> &'static str {
+        if current_price >= target_price {
+            self.get_winning_option_when_target_reached()
+        } else {
+            self.get_winning_option_when_target_not_reached()
+        }
+    }
+
+    /// Validates that the provided options match the expected options for this market type
+    pub fn validate_options(&self, options: &[String]) -> Result<(), String> {
+        if options.len() != 2 {
+            return Err("Markets must have exactly two options".to_string());
+        }
+
+        let expected_options = match self {
+            MarketType::UpDown => vec!["Up", "Down"],
+            MarketType::PriceAt => vec!["Yes", "No"],
+        };
+
+        let mut provided_options = options.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+        provided_options.sort();
+        let mut expected_sorted = expected_options.clone();
+        expected_sorted.sort();
+
+        if provided_options != expected_sorted {
+            return Err(format!(
+                "Options {:?} do not match expected options {:?} for market type {}",
+                options, expected_options, self
+            ));
+        }
+
+        Ok(())
     }
 }
