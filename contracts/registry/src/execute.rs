@@ -90,7 +90,9 @@ pub fn execute_create_market(
         oracle: oracle.clone(),
         commission_rate: config.commission_rate,
         market_code_id: config.market_code_id,
-        //todo: improve this
+        asset_to_track: asset_to_track,
+        market_type: market_type,
+        target_price: target_price,
     };
 
     MARKETS.save(deps.storage, &id, &market_info)?;

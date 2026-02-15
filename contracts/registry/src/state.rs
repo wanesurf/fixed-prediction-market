@@ -1,6 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Coin, Decimal, Timestamp, Uint128};
 use cw_storage_plus::{Item, Map};
+use market::msg::MarketType;
 
 /// Config
 
@@ -60,6 +61,10 @@ pub struct MarketInfo {
     pub oracle: Addr,
     pub commission_rate: Uint128,
     pub market_code_id: u64,
+    pub asset_to_track: String,
+    pub market_type: MarketType,
+    pub target_price: Decimal,
+ 
     
 }
 
