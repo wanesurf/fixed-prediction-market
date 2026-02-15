@@ -50,7 +50,6 @@ pub enum MarketOutcome {
 pub struct MarketInfo {
     pub id: String,
     pub contract_address: Addr,
-    pub pairs: Vec<MarketOption>, //represent the options and the tokens
     pub end_time: Timestamp,      // When the market ends
     pub start_time: Timestamp,    // When the market starts
     pub buy_token: String,        // Denom for the token used to buy shares
@@ -61,6 +60,7 @@ pub struct MarketInfo {
     pub oracle: Addr,
     pub commission_rate: Uint128,
     pub market_code_id: u64,
+    
 }
 
 /// Maps market_id -> MarketInfo (e.g., "truth_market_1" -> MarketInfo)

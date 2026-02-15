@@ -368,9 +368,7 @@ mod tests {
         assert_eq!(market_info.id, "test_market_1");
         //verify we have the right market contract address in the registry
         assert_eq!(market_info.contract_address.to_string(), market_address);
-        assert_eq!(market_info.pairs.len(), 2);
-        assert_eq!(market_info.pairs[0].text, "Yes");
-        assert_eq!(market_info.pairs[1].text, "No");
+     
 
         let market: MarketResponse = wasm
             .query(

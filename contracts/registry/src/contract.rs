@@ -48,7 +48,6 @@ pub fn execute(
     match msg {
         ExecuteMsg::CreateMarket {
             id,
-            options,
             buy_token,
             banner_url,
             description,
@@ -65,7 +64,6 @@ pub fn execute(
             env,
             info,
             id,
-            options,
             buy_token,
             banner_url,
             description,

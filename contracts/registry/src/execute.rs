@@ -15,7 +15,6 @@ pub fn execute_create_market(
     env: Env,
     info: MessageInfo,
     id: String,
-    options: Vec<String>,
     buy_token: String,
     banner_url: String,
     description: String,
@@ -48,29 +47,7 @@ pub fn execute_create_market(
         )));
     }
 
-    if options.len() != 2 {
-        return Err(ContractError::Std(StdError::generic_err(
-            "Markets must have exactly two options",
-        )));
-    }
-
-    // create denom for the options (we redo the same thing in the market contract)
-    let subunit_token_a = format!(
-        "truth{}_{}",
-        options[0].to_lowercase().replace(" ", "_"),
-        id.to_lowercase().replace(" ", "_")
-    );
-
-    //TODO here we need to use the futur contract address (market)
-    let denom_token_a: String = format!("{}-{}", subunit_token_a, "");
-    let subunit_token_b = format!(
-        "truth{}_{}",
-        options[1].to_lowercase().replace(" ", "_"),
-        id.to_lowercase().replace(" ", "_")
-    );
-    //TODO here we need to use the futur contract address (market)
-    let denom_token_b: String = format!("{}-{}", subunit_token_b, "");
-
+   
     let market_instantiate_msg = MarketInstantiateMsg {
         id: id.clone(),
         admin: config.admin.clone(),
@@ -103,16 +80,6 @@ pub fn execute_create_market(
     let market_info = MarketInfo {
         id: id.clone(),
         contract_address: (market_addr.clone()),
-        pairs: vec![
-            MarketOption {
-                text: options[0].clone(),
-                associated_token_denom: denom_token_a.clone(),
-            },
-            MarketOption {
-                text: options[1].clone(),
-                associated_token_denom: denom_token_b.clone(),
-            },
-        ],
         end_time: end_time.clone(),
         start_time: start_time.clone(),
         buy_token: buy_token.clone(),
@@ -123,6 +90,7 @@ pub fn execute_create_market(
         oracle: oracle.clone(),
         commission_rate: config.commission_rate,
         market_code_id: config.market_code_id,
+        //todo: improve this
     };
 
     MARKETS.save(deps.storage, &id, &market_info)?;
