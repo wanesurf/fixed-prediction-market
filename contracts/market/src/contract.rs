@@ -185,6 +185,11 @@ pub fn instantiate(
                 .add_attribute("market_type", msg.market_type.to_string())
                 .add_attribute("target_price", msg.target_price.to_string())
                 .add_attribute("initial_price", market_config.initial_price.to_string())
+                .add_attribute(
+                    "initial_odds",
+                    cosmwasm_std::to_json_string(&msg.market_type.create_option_odds(Decimal::zero(), Decimal::zero()))
+                    .unwrap_or_else(|_| "[]".to_string()),
+                )
         )
         .add_message(CosmosMsg::Any(issue_token_a.to_any()))
         .add_message(CosmosMsg::Any(issue_token_b.to_any())))
@@ -330,16 +335,7 @@ pub fn sell_share(
                 .add_attribute("total_volume", market_state.volume.to_string())
                 .add_attribute(
                     "odds",
-                    cosmwasm_std::to_json_string(&vec![
-                        crate::msg::OptionOdds {
-                            option: config.pairs[0].text.clone(),
-                            odds: odds_a,
-                        },
-                        crate::msg::OptionOdds {
-                            option: config.pairs[1].text.clone(),
-                            odds: odds_b,
-                        },
-                    ])
+                    cosmwasm_std::to_json_string(&market_state.create_type_safe_odds(&config))
                     .unwrap_or_else(|_| "[]".to_string()),
                 ),
         )
@@ -436,17 +432,8 @@ pub fn buy_share(
 
     let response = Response::new();
 
-    let (odds_a, odds_b) = market_state.calculate_odds(&config);
-    let odds = vec![
-        crate::msg::OptionOdds {
-            option: config.pairs[0].text.clone(),
-            odds: odds_a,
-        },
-        crate::msg::OptionOdds {
-            option: config.pairs[1].text.clone(),
-            odds: odds_b,
-        },
-    ];
+    // Use type-safe odds creation
+    let odds = market_state.create_type_safe_odds(&config);
 
     let total_value = Uint128::from_str(&market_state.total_value.amount).unwrap();
 
@@ -478,6 +465,7 @@ pub fn resolve(
 
     //TODO: check how can we get the price at resolve time!
     //Right now we get the latest price wihcih might be different then the price at end_time!
+    //Etheir a relayer call this function at the right time or maybe clp_feed can keep history
     let config = CONFIG.load(deps.storage)?;
     let mut market_state = MARKET_STATE.load(deps.storage)?;
 
@@ -526,6 +514,9 @@ pub fn resolve(
             format!("Could not find option")
         ))?;
 
+    // Calculate type-safe final odds before updating the market state
+    let final_odds = market_state.create_type_safe_odds(&config);
+
     // Update the market status with the winning option
     market_state.status = MarketStatus::Resolved(winning_option_obj);
 
@@ -540,7 +531,11 @@ pub fn resolve(
             .add_attribute("target_price", config.target_price.to_string())
             .add_attribute("initial_price", config.initial_price.to_string())
             .add_attribute("user", info.sender.to_string())
-            .add_attribute("total_value", market_state.total_value.amount.to_string()),
+            .add_attribute("total_value", market_state.total_value.amount.to_string())
+            .add_attribute(
+                "final_odds",
+                cosmwasm_std::to_json_string(&final_odds).unwrap_or_else(|_| "[]".to_string()),
+            ),
     ))
 }
 
@@ -611,6 +606,7 @@ pub fn withdraw(
             Event::new("cc_prediction_market_withdraw")
                 .add_attribute("market_id", market_id)
                 .add_attribute("user", info.sender.to_string())
+                .add_attribute("winning_option", winning_option.text.clone())
                 .add_attribute("total_winnings", total_winnings.amount.to_string()),
         )
         .add_message(CosmosMsg::Any(transfer_msg.to_any())))

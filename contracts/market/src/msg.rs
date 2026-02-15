@@ -262,4 +262,20 @@ impl MarketType {
 
         Ok(())
     }
+
+    /// Creates type-safe odds ensuring correct option assignment
+    /// first_odds: odds for the first option (Up/Yes)
+    /// second_odds: odds for the second option (Down/No)
+    pub fn create_option_odds(&self, first_odds: cosmwasm_std::Decimal, second_odds: cosmwasm_std::Decimal) -> Vec<OptionOdds> {
+        vec![
+            OptionOdds {
+                option: self.get_winning_option_when_target_reached().to_string(),
+                odds: first_odds,
+            },
+            OptionOdds {
+                option: self.get_winning_option_when_target_not_reached().to_string(),
+                odds: second_odds,
+            },
+        ]
+    }
 }

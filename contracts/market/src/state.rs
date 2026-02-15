@@ -115,6 +115,12 @@ impl MarketState {
         (odds_a, odds_b)
     }
 
+    /// Create type-safe odds using market type to ensure correct option assignment
+    pub fn create_type_safe_odds(&self, config: &Config) -> Vec<crate::msg::OptionOdds> {
+        let (odds_a, odds_b) = self.calculate_odds(config);
+        config.market_type.create_option_odds(odds_a, odds_b)
+    }
+
     pub fn calculate_potential_winnings(
         &self,
         storage: &dyn Storage,
